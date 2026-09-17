@@ -1,5 +1,5 @@
 -- ?*"?*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*??*-
--- ?*'  RIVALS HUB v3.1  ?*  by Axiom  |  v21 patch: rage/aim fixes + CharOrigin + AutoReconnect + BGPresets                                          ?*'
+-- ?*'  RIVALS HUB v3.1  ?*  by Axiom  |  v22 patch: aimbot duel fix + FOV hide + premium welcome + fly back-only + Mixture mode                        ?*'
 -- ?*'  UI     : LinoriaLib  (GhostDuckyy)                                    ?*'
 -- ?*'  Addons : SaveManager + ThemeManager (Linoria addons)                  ?*'
 -- ?*'  Tabs   : Aimbot ?* Ragebot ?* ESP ?* World ?* Misc ?* Settings            ?*'
@@ -62,6 +62,893 @@ pcall(function()
     l.Parent = sg
     getgenv()._HubBootDot = l
 end)
+
+
+-- ── KEY GATE (runs before everything: no valid key = no hub) ──
+-- One key per device, one device per key, permanent. First redeem binds
+-- key<->hwid into Shade External/key.dat; every execute re-verifies it.
+-- There is no path past this block without passing (the chunk yields here).
+HUB_KEY_EPOCH = 3 -- bump to reset EVERYONE: old bindings ignored, all re-redeem --
+-- STAFF: these usernames NEVER see the key box. Edit me: put exact
+-- Roblox usernames (not display names) in quotes, comma-separated.
+-- owner = you. coowner = full trust. premium = skips key, nothing else.
+HUB_STAFF = {
+    owner = { "aweaweawewa09" },
+    coowner = { "matteamarcusa" },
+    premium = {},
+}
+-- KEY TIERS: redeeming one of these keys grants the tier on that device.
+-- The coolkean key = owner. Co-owner is username-based above.
+HUB_KEY_TIERS = {
+    ["4b0644583d7c1b09034fe59c421822a12e88c87bdb3f0361f8a5c4a87cb194fa"] = "owner",
+}
+HUB_KEYS = {
+    ["606ed016-451f-467e-990b-6d6e6f4527dd"] = true,
+    ["3803069b40cd9c72a86ba325a6286bae8f09f00228176d6969551a1aa6e7e00d"] = true,
+    ["36e975c6f393e787cbad4a64358398c3592e3765c18796aa26939952724ea6f3"] = true,
+    ["fada08bf817b818f7f752f3e959b6dd3224deb390c55de4f1637f157cb5f4f12"] = true,
+    ["d5edcefb3d104295d98887c4fa443a27c3407dcbf55a5eff62227ebba5db296d"] = true,
+    ["4c2f531e45568c0e7767dde8c1e0debb3c1d99c8257cdde0a3c7d17d34f138ce"] = true,
+    ["7cedc6293738d24eea842adc966b3eea56737bc0698c6b5967802f98c2e534ea"] = true,
+    ["ca43f64800c6969f7f39a66ed71a88c10f0317f7943f2ad755b3016bbcb8337a"] = true,
+    ["d2d79350b3c2a02db072f85c0c330892d817a97e26ed6c6b232023f30e7f45f8"] = true,
+    ["9d774e1ded8fa7b892507a23a9b540a542234014b42c9bb59b917485201c50d0"] = true,
+    ["4b0644583d7c1b09034fe59c421822a12e88c87bdb3f0361f8a5c4a87cb194fa"] = true, -- coolkean --
+}
+do
+    local PlayersKG = game:GetService("Players")
+    local HttpKG = game:GetService("HttpService")
+    local lpKG = PlayersKG.LocalPlayer
+    local cgKG = game:GetService("CoreGui")
+    -- Session-persistent bypass: once any path passes the gate this session,
+    -- re-executes skip it entirely. Owner/staff never see the box at all.
+    local passedKG = getgenv()._HubKeyPassed == true
+    -- re-executes stack duplicate gates: kill every leftover first.
+    pcall(function()
+        for _, g in ipairs(cgKG:GetChildren()) do
+            if g.Name == "_HubKeyGate" then g:Destroy() end
+        end
+    end)
+    -- Session already cleared (owner, prior redeem, or re-execute): skip gate.
+    if passedKG then
+        -- nothing to do: hub boots normally below.
+    else
+    pcall(function() if type(makefolder) == "function" then makefolder("Shade External") end end)
+    local KEY_FILE = "Shade External/key.dat"
+    local function keyNorm(s)
+        return string.lower(tostring(s or ""):gsub("%s+", ""))
+    end
+    local function keyHwid()
+        local id = nil
+        pcall(function()
+            id = game:GetService("RbxAnalyticsService"):GetClientId()
+        end)
+        if type(id) == "string" and id ~= "" then return id end
+        pcall(function()
+            if type(gethwid) == "function" then id = gethwid() end
+        end)
+        if type(id) == "string" and id ~= "" then return id end
+        return "unknown-device"
+    end
+    local function keyRead()
+        local ok, has = pcall(function()
+            return type(isfile) == "function" and isfile(KEY_FILE)
+        end)
+        if not (ok and has) then return nil end
+        local okR, raw = pcall(readfile, KEY_FILE)
+        if not okR or type(raw) ~= "string" then return nil end
+        local okJ, t = pcall(function() return HttpKG:JSONDecode(raw) end)
+        if okJ and type(t) == "table" then return t end
+        return nil
+    end
+    local function keyWrite(key, hwid)
+        pcall(function()
+            if type(writefile) ~= "function" then return end
+            local kt = HUB_KEY_TIERS and HUB_KEY_TIERS[keyNorm(key)] or nil
+            writefile(KEY_FILE, HttpKG:JSONEncode({ key = key, hwid = hwid, epoch = HUB_KEY_EPOCH, tier = kt,
+                user = lpKG and lpKG.Name or "?" }))
+        end)
+    end
+    local hwidKG = keyHwid()
+    local storedKG = keyRead()
+    if storedKG and storedKG.epoch ~= HUB_KEY_EPOCH then storedKG = nil end -- reset-all: old epoch ignored --
+    -- staff bypass: owner / co-owner / premium by USERNAME. No key, ever.
+    -- Base list lives in HUB_STAFF above; extra names added in-menu
+    -- (Settings > Staff Access) persist in Shade External/staff.dat.
+    local function staffMerge()
+        local merged = { owner = {}, coowner = {}, premium = {} }
+        pcall(function()
+            local st = HUB_STAFF
+            if type(st) == "table" then
+                for _, tier in ipairs({ "owner", "coowner", "premium" }) do
+                    if type(st[tier]) == "table" then
+                        for _, n in ipairs(st[tier]) do table.insert(merged[tier], tostring(n)) end
+                    end
+                end
+            end
+        end)
+        pcall(function()
+            if type(isfile) == "function" and isfile("Shade External/staff.dat") then
+                local t = HttpKG:JSONDecode(readfile("Shade External/staff.dat"))
+                if type(t) == "table" then
+                    for _, tier in ipairs({ "owner", "coowner", "premium" }) do
+                        if type(t[tier]) == "table" then
+                            for _, n in ipairs(t[tier]) do table.insert(merged[tier], tostring(n)) end
+                        end
+                    end
+                end
+            end
+        end)
+        return merged
+    end
+    getgenv()._HubStaffMerged = staffMerge()
+    -- staff bypass: owner / co-owner / premium by USERNAME. No key, ever.
+    -- ban check FIRST: banned usernames never use the hub again. No bypass.
+    do
+        local banned = false
+        pcall(function()
+            if type(isfile) == "function" and isfile("Shade External/bans.dat") then
+                local HttpB = game:GetService("HttpService")
+                local t = HttpB:JSONDecode(readfile("Shade External/bans.dat"))
+                if type(t) == "table" and type(t.names) == "table" and lpKG then
+                    local nm, dp = string.lower(lpKG.Name or ""), string.lower(lpKG.DisplayName or "")
+                    for _, n in ipairs(t.names) do
+                        local w = string.lower(tostring(n or ""))
+                        if w ~= "" and (w == nm or w == dp) then banned = true break end
+                    end
+                end
+            end
+        end)
+        if banned then
+            pcall(function()
+                local sg = Instance.new("ScreenGui")
+                sg.Name = "_HubKeyGate"
+                sg.ResetOnSpawn = false
+                sg.IgnoreGuiInset = true
+                sg.DisplayOrder = 10000
+                sg.Parent = cgKG
+                local dim = Instance.new("Frame")
+                dim.Size = UDim2.new(1, 0, 1, 0)
+                dim.BackgroundColor3 = Color3.fromRGB(20, 4, 6)
+                dim.BorderSizePixel = 0
+                dim.Active = true
+                dim.Parent = sg
+                local t = Instance.new("TextLabel")
+                t.Size = UDim2.new(0, 420, 0, 120)
+                t.Position = UDim2.new(0.5, -210, 0.5, -60)
+                t.BackgroundTransparency = 1
+                t.Font = Enum.Font.GothamBlack
+                t.TextSize = 30
+                t.TextColor3 = Color3.fromRGB(255, 70, 70)
+                t.Text = "BANNED"
+                t.Parent = sg
+                local s2 = Instance.new("TextLabel")
+                s2.Size = UDim2.new(0, 420, 0, 30)
+                s2.Position = UDim2.new(0.5, -210, 0.5, 20)
+                s2.BackgroundTransparency = 1
+                s2.Font = Enum.Font.GothamBold
+                s2.TextSize = 14
+                s2.TextColor3 = Color3.new(1, 1, 1)
+                s2.Text = "@" .. (lpKG and lpKG.Name or "?")
+                s2.Parent = sg
+            end)
+            while true do task.wait(1) end
+        end
+    end
+    local function staffTier()
+        local lp = lpKG
+        if not lp then return nil end
+        local nm, dp = string.lower(lp.Name or ""), string.lower(lp.DisplayName or "")
+        -- merged cache first, then live re-read (menu adds apply instantly,
+        -- even mid-session), then the file-top table directly.
+        local cands = {}
+        pcall(function()
+            local m = getgenv()._HubStaffMerged
+            if type(m) == "table" then table.insert(cands, m) end
+        end)
+        pcall(function()
+            if type(isfile) == "function" and isfile("Shade External/staff.dat") then
+                local t = HttpKG:JSONDecode(readfile("Shade External/staff.dat"))
+                if type(t) == "table" then table.insert(cands, t) end
+            end
+        end)
+        if type(HUB_STAFF) == "table" then table.insert(cands, HUB_STAFF) end
+        for _, st in ipairs(cands) do
+            if type(st) ~= "table" then continue end
+            for _, tier in ipairs({ "owner", "coowner", "premium" }) do
+                local list = st[tier]
+                if type(list) == "table" then
+                    for _, n in ipairs(list) do
+                        local want = string.lower(tostring(n or ""):gsub("%s+", ""))
+                        if want ~= "" and want ~= "yournamehere" and (want == nm or want == dp) then
+                            return tier
+                        end
+                    end
+                end
+            end
+        end
+        return nil
+    end
+    local tierKG = nil
+    -- key-tier first: the coolkean key IS owner on whatever device holds it.
+    pcall(function()
+        local sk = storedKG
+        if sk and HUB_KEYS[keyNorm(sk.key)] and sk.hwid == hwidKG then
+            local kt = HUB_KEY_TIERS and HUB_KEY_TIERS[keyNorm(sk.key)] or nil
+            if kt == "owner" or kt == "coowner" or kt == "premium" then
+                tierKG = kt
+                getgenv()._HubKeyTier = kt
+            end
+        end
+    end)
+    if not tierKG then tierKG = staffTier() end
+    if tierKG then
+        -- staff/owner: stamp session flag so re-executes never show the gate.
+        passedKG = true
+        getgenv()._HubKeyPassed = true
+        getgenv()._HubKeyTier = tierKG
+        -- v22: premium welcome card (matches key system GUI style exactly)
+        pcall(function()
+            local TweenWB = game:GetService("TweenService")
+            local sg = Instance.new("ScreenGui")
+            sg.Name = "_HubKeyGate"
+            sg.ResetOnSpawn = false
+            sg.IgnoreGuiInset = true
+            sg.DisplayOrder = 10000
+            sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+            sg.Parent = cgKG
+            local dim = Instance.new("Frame")
+            dim.Size = UDim2.new(1, 0, 1, 0)
+            dim.BackgroundColor3 = Color3.fromRGB(6, 4, 14)
+            dim.BackgroundTransparency = 0.25
+            dim.BorderSizePixel = 0
+            dim.Active = true
+            dim.Parent = sg
+            local card = Instance.new("Frame")
+            card.Size = UDim2.new(0, 400, 0, 340)
+            card.Position = UDim2.new(0.5, -200, 0.5, -170)
+            card.BackgroundColor3 = Color3.fromRGB(20, 11, 36)
+            card.BorderSizePixel = 0
+            card.Parent = sg
+            local cc = Instance.new("UICorner")
+            cc.CornerRadius = UDim.new(0, 14)
+            cc.Parent = card
+            local stroke = Instance.new("UIStroke")
+            stroke.Color = Color3.fromRGB(255, 210, 130)
+            stroke.Thickness = 2
+            stroke.Transparency = 0.2
+            stroke.Parent = card
+            -- animated sheen
+            local sheen = Instance.new("UIGradient")
+            sheen.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 11, 36)),
+                ColorSequenceKeypoint.new(0.5, Color3.fromRGB(50, 28, 80)),
+                ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 11, 36)),
+            })
+            sheen.Rotation = 25
+            sheen.Parent = card
+            task.spawn(function()
+                while card.Parent do
+                    pcall(function()
+                        TweenWB:Create(sheen, TweenInfo.new(2.0, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { Rotation = -25 }):Play()
+                    end)
+                    task.wait(2.1)
+                    if not card.Parent then break end
+                    pcall(function()
+                        TweenWB:Create(sheen, TweenInfo.new(2.0, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { Rotation = 25 }):Play()
+                    end)
+                    task.wait(2.1)
+                end
+            end)
+            -- breathing border glow
+            task.spawn(function()
+                local up = true
+                while card.Parent do
+                    up = not up
+                    pcall(function()
+                        TweenWB:Create(stroke, TweenInfo.new(1.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { Transparency = up and 0.6 or 0.0 }):Play()
+                    end)
+                    task.wait(1.35)
+                end
+            end)
+            -- SHADE header
+            local hdr = Instance.new("TextLabel")
+            hdr.Size = UDim2.new(1, -32, 0, 28)
+            hdr.Position = UDim2.new(0, 16, 0, 14)
+            hdr.BackgroundTransparency = 1
+            hdr.Font = Enum.Font.GothamBlack
+            hdr.TextSize = 18
+            hdr.Text = "S H A D E"
+            hdr.TextColor3 = Color3.fromRGB(15, 7, 28)
+            hdr.Parent = card
+            local hdrSt = Instance.new("UIStroke")
+            hdrSt.Color = Color3.fromRGB(175, 130, 255)
+            hdrSt.Thickness = 1
+            hdrSt.Transparency = 0.3
+            hdrSt.Parent = hdr
+            local tierLbl = Instance.new("TextLabel")
+            tierLbl.Size = UDim2.new(1, -32, 0, 14)
+            tierLbl.Position = UDim2.new(0, 16, 0, 44)
+            tierLbl.BackgroundTransparency = 1
+            tierLbl.Font = Enum.Font.GothamBlack
+            tierLbl.TextSize = 12
+            tierLbl.Text = string.upper(tierKG) .. " ACCESS"
+            tierLbl.TextColor3 = Color3.fromRGB(255, 210, 130)
+            tierLbl.Parent = card
+            -- profile picture
+            local thumb = Instance.new("ImageLabel")
+            thumb.Size = UDim2.new(0, 100, 0, 100)
+            thumb.Position = UDim2.new(0.5, -50, 0, 68)
+            thumb.BackgroundColor3 = Color3.fromRGB(32, 20, 54)
+            thumb.BorderSizePixel = 0
+            thumb.ScaleType = Enum.ScaleType.Fit
+            thumb.Parent = card
+            local tc = Instance.new("UICorner")
+            tc.CornerRadius = UDim.new(1, 0)
+            tc.Parent = thumb
+            local tstroke = Instance.new("UIStroke")
+            tstroke.Color = Color3.fromRGB(255, 210, 130)
+            tstroke.Thickness = 2
+            tstroke.Transparency = 0.3
+            tstroke.Parent = thumb
+            -- pop-in animation
+            pcall(function()
+                local sc = Instance.new("UIScale")
+                sc.Scale = 0.3
+                sc.Parent = thumb
+                TweenWB:Create(sc, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+            end)
+            pcall(function()
+                if lpKG then
+                    local img, ready = PlayersKG:GetUserThumbnailAsync(lpKG.UserId,
+                        Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
+                    if ready and type(img) == "string" and img ~= "" then thumb.Image = img end
+                end
+            end)
+            -- welcome text
+            local welcomeTop = Instance.new("TextLabel")
+            welcomeTop.Size = UDim2.new(1, -32, 0, 16)
+            welcomeTop.Position = UDim2.new(0, 16, 0, 178)
+            welcomeTop.BackgroundTransparency = 1
+            welcomeTop.Font = Enum.Font.GothamBold
+            welcomeTop.TextSize = 13
+            welcomeTop.Text = "Welcome back,"
+            welcomeTop.TextColor3 = Color3.fromRGB(200, 170, 255)
+            welcomeTop.Parent = card
+            local nameL = Instance.new("TextLabel")
+            nameL.Size = UDim2.new(1, -32, 0, 26)
+            nameL.Position = UDim2.new(0, 16, 0, 196)
+            nameL.BackgroundTransparency = 1
+            nameL.Font = Enum.Font.GothamBlack
+            nameL.TextSize = 22
+            nameL.Text = lpKG and (lpKG.DisplayName ~= "" and lpKG.DisplayName or lpKG.Name) or "?"
+            nameL.TextColor3 = Color3.new(1, 1, 1)
+            nameL.Parent = card
+            local atName = Instance.new("TextLabel")
+            atName.Size = UDim2.new(1, -32, 0, 16)
+            atName.Position = UDim2.new(0, 16, 0, 222)
+            atName.BackgroundTransparency = 1
+            atName.Font = Enum.Font.GothamBold
+            atName.TextSize = 13
+            atName.Text = "@" .. (lpKG and lpKG.Name or "?")
+            atName.TextColor3 = Color3.fromRGB(160, 160, 170)
+            atName.Parent = card
+            -- divider
+            local div = Instance.new("Frame")
+            div.Size = UDim2.new(1, -48, 0, 1)
+            div.Position = UDim2.new(0, 24, 0, 248)
+            div.BackgroundColor3 = Color3.fromRGB(80, 50, 120)
+            div.BorderSizePixel = 0
+            div.Parent = card
+            -- tier badge
+            local badge = Instance.new("Frame")
+            badge.Size = UDim2.new(0, 120, 0, 32)
+            badge.Position = UDim2.new(0.5, -60, 0, 260)
+            badge.BackgroundColor3 = Color3.fromRGB(120, 60, 200)
+            badge.BorderSizePixel = 0
+            badge.Parent = card
+            local badgeCo = Instance.new("UICorner")
+            badgeCo.CornerRadius = UDim.new(0, 8)
+            badgeCo.Parent = badge
+            local badgeGrad = Instance.new("UIGradient")
+            badgeGrad.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 60, 200)),
+                ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 110, 255)),
+            })
+            badgeGrad.Rotation = 90
+            badgeGrad.Parent = badge
+            local badgeText = Instance.new("TextLabel")
+            badgeText.Size = UDim2.new(1, 0, 1, 0)
+            badgeText.BackgroundTransparency = 1
+            badgeText.Font = Enum.Font.GothamBlack
+            badgeText.TextSize = 14
+            badgeText.Text = string.upper(tierKG)
+            badgeText.TextColor3 = Color3.new(1, 1, 1)
+            badgeText.Parent = badge
+            local tagLine = Instance.new("TextLabel")
+            tagLine.Size = UDim2.new(1, -32, 0, 16)
+            tagLine.Position = UDim2.new(0, 16, 0, 304)
+            tagLine.BackgroundTransparency = 1
+            tagLine.Font = Enum.Font.GothamBold
+            tagLine.TextSize = 12
+            tagLine.Text = "Shade External · Rivals Hub v3"
+            tagLine.TextColor3 = Color3.fromRGB(100, 90, 120)
+            tagLine.Parent = card
+            -- slide in from below
+            card.Position = UDim2.new(0.5, -200, 1, 20)
+            pcall(function()
+                TweenWB:Create(card, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+                    { Position = UDim2.new(0.5, -200, 0.5, -170) }):Play()
+            end)
+            -- auto-dismiss with fade
+            task.delay(2.4, function()
+                pcall(function()
+                    TweenWB:Create(card, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+                        { Position = UDim2.new(0.5, -200, 1, 20) }):Play()
+                    TweenWB:Create(dim, TweenInfo.new(0.4), { BackgroundTransparency = 1 }):Play()
+                end)
+                task.wait(0.45)
+                pcall(function() sg:Destroy() end)
+            end)
+        end)
+        task.wait(0.2)
+    elseif storedKG and HUB_KEYS[keyNorm(storedKG.key)] and storedKG.hwid == hwidKG then
+        passedKG = true -- redeemed before on this device: straight in --
+        getgenv()._HubKeyPassed = true
+    end
+    if passedKG then
+        -- v22: premium welcome card for key holders (matches key system GUI)
+        pcall(function()
+            local TweenWB2 = game:GetService("TweenService")
+            local sg = Instance.new("ScreenGui")
+            sg.Name = "_HubKeyGate"
+            sg.ResetOnSpawn = false
+            sg.IgnoreGuiInset = true
+            sg.DisplayOrder = 10000
+            sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+            sg.Parent = cgKG
+            local dim = Instance.new("Frame")
+            dim.Size = UDim2.new(1, 0, 1, 0)
+            dim.BackgroundColor3 = Color3.fromRGB(6, 4, 14)
+            dim.BackgroundTransparency = 0.3
+            dim.BorderSizePixel = 0
+            dim.Active = true
+            dim.Parent = sg
+            local card = Instance.new("Frame")
+            card.Size = UDim2.new(0, 400, 0, 320)
+            card.Position = UDim2.new(0.5, -200, 1, 20)
+            card.BackgroundColor3 = Color3.fromRGB(20, 11, 36)
+            card.BorderSizePixel = 0
+            card.Parent = sg
+            local cc = Instance.new("UICorner")
+            cc.CornerRadius = UDim.new(0, 14)
+            cc.Parent = card
+            local stroke = Instance.new("UIStroke")
+            stroke.Color = Color3.fromRGB(175, 120, 255)
+            stroke.Thickness = 2
+            stroke.Transparency = 0.2
+            stroke.Parent = card
+            local sheen = Instance.new("UIGradient")
+            sheen.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 11, 36)),
+                ColorSequenceKeypoint.new(0.5, Color3.fromRGB(46, 24, 80)),
+                ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 11, 36)),
+            })
+            sheen.Rotation = 25
+            sheen.Parent = card
+            task.spawn(function()
+                while card.Parent do
+                    pcall(function()
+                        TweenWB2:Create(sheen, TweenInfo.new(2.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { Rotation = -25 }):Play()
+                    end)
+                    task.wait(2.3)
+                    if not card.Parent then break end
+                    pcall(function()
+                        TweenWB2:Create(sheen, TweenInfo.new(2.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { Rotation = 25 }):Play()
+                    end)
+                    task.wait(2.3)
+                end
+            end)
+            task.spawn(function()
+                local up = true
+                while card.Parent do
+                    up = not up
+                    pcall(function()
+                        TweenWB2:Create(stroke, TweenInfo.new(1.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), { Transparency = up and 0.55 or 0.05 }):Play()
+                    end)
+                    task.wait(1.45)
+                end
+            end)
+            local hdr = Instance.new("TextLabel")
+            hdr.Size = UDim2.new(1, -32, 0, 26)
+            hdr.Position = UDim2.new(0, 16, 0, 14)
+            hdr.BackgroundTransparency = 1
+            hdr.Font = Enum.Font.GothamBlack
+            hdr.TextSize = 16
+            hdr.Text = "S H A D E"
+            hdr.TextColor3 = Color3.fromRGB(15, 7, 28)
+            hdr.Parent = card
+            local hdrSt = Instance.new("UIStroke")
+            hdrSt.Color = Color3.fromRGB(175, 130, 255)
+            hdrSt.Thickness = 1
+            hdrSt.Transparency = 0.35
+            hdrSt.Parent = hdr
+            local premLabel = Instance.new("TextLabel")
+            premLabel.Size = UDim2.new(1, -32, 0, 14)
+            premLabel.Position = UDim2.new(0, 16, 0, 42)
+            premLabel.BackgroundTransparency = 1
+            premLabel.Font = Enum.Font.GothamBlack
+            premLabel.TextSize = 12
+            premLabel.Text = "PREMIUM ACCESS"
+            premLabel.TextColor3 = Color3.fromRGB(255, 210, 130)
+            premLabel.Parent = card
+            local thumb = Instance.new("ImageLabel")
+            thumb.Size = UDim2.new(0, 100, 0, 100)
+            thumb.Position = UDim2.new(0.5, -50, 0, 64)
+            thumb.BackgroundColor3 = Color3.fromRGB(32, 20, 54)
+            thumb.BorderSizePixel = 0
+            thumb.ScaleType = Enum.ScaleType.Fit
+            thumb.Parent = card
+            local tc = Instance.new("UICorner")
+            tc.CornerRadius = UDim.new(1, 0)
+            tc.Parent = thumb
+            local tstroke = Instance.new("UIStroke")
+            tstroke.Color = Color3.fromRGB(255, 210, 130)
+            tstroke.Thickness = 2
+            tstroke.Transparency = 0.3
+            tstroke.Parent = thumb
+            pcall(function()
+                local sc = Instance.new("UIScale")
+                sc.Scale = 0.3
+                sc.Parent = thumb
+                TweenWB2:Create(sc, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+            end)
+            pcall(function()
+                if lpKG then
+                    local img, ready = PlayersKG:GetUserThumbnailAsync(lpKG.UserId,
+                        Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
+                    if ready and type(img) == "string" and img ~= "" then thumb.Image = img end
+                end
+            end)
+            local welcomeTop = Instance.new("TextLabel")
+            welcomeTop.Size = UDim2.new(1, -32, 0, 16)
+            welcomeTop.Position = UDim2.new(0, 16, 0, 172)
+            welcomeTop.BackgroundTransparency = 1
+            welcomeTop.Font = Enum.Font.GothamBold
+            welcomeTop.TextSize = 13
+            welcomeTop.Text = "Welcome back,"
+            welcomeTop.TextColor3 = Color3.fromRGB(200, 170, 255)
+            welcomeTop.Parent = card
+            local nameL = Instance.new("TextLabel")
+            nameL.Size = UDim2.new(1, -32, 0, 26)
+            nameL.Position = UDim2.new(0, 16, 0, 190)
+            nameL.BackgroundTransparency = 1
+            nameL.Font = Enum.Font.GothamBlack
+            nameL.TextSize = 22
+            nameL.Text = lpKG and (lpKG.DisplayName ~= "" and lpKG.DisplayName or lpKG.Name) or "?"
+            nameL.TextColor3 = Color3.new(1, 1, 1)
+            nameL.Parent = card
+            local atName = Instance.new("TextLabel")
+            atName.Size = UDim2.new(1, -32, 0, 16)
+            atName.Position = UDim2.new(0, 16, 0, 216)
+            atName.BackgroundTransparency = 1
+            atName.Font = Enum.Font.GothamBold
+            atName.TextSize = 13
+            atName.Text = "@" .. (lpKG and lpKG.Name or "?")
+            atName.TextColor3 = Color3.fromRGB(160, 160, 170)
+            atName.Parent = card
+            local div = Instance.new("Frame")
+            div.Size = UDim2.new(1, -48, 0, 1)
+            div.Position = UDim2.new(0, 24, 0, 242)
+            div.BackgroundColor3 = Color3.fromRGB(80, 50, 120)
+            div.BorderSizePixel = 0
+            div.Parent = card
+            local tagLine = Instance.new("TextLabel")
+            tagLine.Size = UDim2.new(1, -32, 0, 16)
+            tagLine.Position = UDim2.new(0, 16, 0, 252)
+            tagLine.BackgroundTransparency = 1
+            tagLine.Font = Enum.Font.GothamBold
+            tagLine.TextSize = 12
+            tagLine.Text = "Shade External · Rivals Hub v3"
+            tagLine.TextColor3 = Color3.fromRGB(100, 90, 120)
+            tagLine.Parent = card
+            local greenStatus = Instance.new("TextLabel")
+            greenStatus.Size = UDim2.new(1, -32, 0, 18)
+            greenStatus.Position = UDim2.new(0, 16, 0, 278)
+            greenStatus.BackgroundTransparency = 1
+            greenStatus.Font = Enum.Font.GothamBlack
+            greenStatus.TextSize = 13
+            greenStatus.Text = "Key verified. Loading hub..."
+            greenStatus.TextColor3 = Color3.fromRGB(140, 255, 170)
+            greenStatus.Parent = card
+            -- slide in from below
+            TweenWB2:Create(card, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+                { Position = UDim2.new(0.5, -200, 0.5, -160) }):Play()
+            task.delay(2.2, function()
+                pcall(function()
+                    TweenWB2:Create(card, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+                        { Position = UDim2.new(0.5, -200, 1, 20) }):Play()
+                    TweenWB2:Create(dim, TweenInfo.new(0.4), { BackgroundTransparency = 1 }):Play()
+                end)
+                task.wait(0.45)
+                pcall(function() sg:Destroy() end)
+            end)
+        end)
+    end
+    if not passedKG then
+        -- premium loading screen: profile + welcome + masked key box.
+        -- No close, no bypass. Key never leaves the box unmasked.
+        local TweenKG = game:GetService("TweenService")
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "_HubKeyGate"
+        sg.ResetOnSpawn = false
+        sg.IgnoreGuiInset = true
+        sg.DisplayOrder = 10000
+        sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        sg.Parent = cgKG
+        local dim = Instance.new("Frame")
+        dim.Size = UDim2.new(1, 0, 1, 0)
+        dim.BackgroundColor3 = Color3.fromRGB(6, 4, 14)
+        dim.BackgroundTransparency = 0.1
+        dim.BorderSizePixel = 0
+        dim.Active = true
+        dim.Parent = sg
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(0, 400, 0, 500)
+        card.Position = UDim2.new(0.5, -200, 0.5, -250)
+        card.BackgroundColor3 = Color3.fromRGB(20, 11, 36)
+        card.BorderSizePixel = 0
+        card.Parent = sg
+        local cc = Instance.new("UICorner")
+        cc.CornerRadius = UDim.new(0, 14)
+        cc.Parent = card
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = Color3.fromRGB(175, 120, 255)
+        stroke.Thickness = 2
+        stroke.Transparency = 0.2
+        stroke.Parent = card
+        -- animated sheen sweeping the card
+        local sheen = Instance.new("UIGradient")
+        sheen.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(20, 11, 36)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(46, 24, 80)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 11, 36)),
+        })
+        sheen.Rotation = 25
+        sheen.Parent = card
+        task.spawn(function()
+            while card.Parent do
+                pcall(function()
+                    TweenKG:Create(sheen, TweenInfo.new(2.2,
+                        Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+                        { Rotation = -25 }):Play()
+                end)
+                task.wait(2.3)
+                if not card.Parent then break end
+                pcall(function()
+                    TweenKG:Create(sheen, TweenInfo.new(2.2,
+                        Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+                        { Rotation = 25 }):Play()
+                end)
+                task.wait(2.3)
+            end
+        end)
+        -- breathing glow on the border
+        task.spawn(function()
+            local up = true
+            while card.Parent do
+                up = not up
+                pcall(function()
+                    TweenKG:Create(stroke, TweenInfo.new(1.4,
+                        Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+                        { Transparency = up and 0.55 or 0.05 }):Play()
+                end)
+                task.wait(1.45)
+            end
+        end)
+        local function lbl(txt, y, size, col, strokeC)
+            local t = Instance.new("TextLabel")
+            t.Size = UDim2.new(1, -32, 0, size)
+            t.Position = UDim2.new(0, 16, 0, y)
+            t.BackgroundTransparency = 1
+            t.Font = Enum.Font.GothamBlack
+            t.TextSize = size > 30 and 16 or size
+            t.Text = txt
+            t.TextColor3 = col or Color3.new(1, 1, 1)
+            t.TextTruncate = Enum.TextTruncate.AtEnd
+            t.Parent = card
+            if strokeC then
+                local st = Instance.new("UIStroke")
+                st.Color = strokeC
+                st.Thickness = 1
+                st.Transparency = 0.4
+                st.Parent = t
+            end
+            return t
+        end
+        lbl("S H A D E", 14, 26, Color3.fromRGB(15, 7, 28), Color3.fromRGB(175, 130, 255))
+        lbl("PREMIUM ACCESS", 44, 12, Color3.fromRGB(255, 210, 130))
+        local thumb = Instance.new("ImageLabel")
+        thumb.Size = UDim2.new(0, 110, 0, 110)
+        thumb.Position = UDim2.new(0.5, -55, 0, 72)
+        thumb.BackgroundColor3 = Color3.fromRGB(32, 20, 54)
+        thumb.BorderSizePixel = 0
+        thumb.ScaleType = Enum.ScaleType.Fit
+        thumb.Parent = card
+        local tc = Instance.new("UICorner")
+        tc.CornerRadius = UDim.new(1, 0)
+        tc.Parent = thumb
+        local tstroke = Instance.new("UIStroke")
+        tstroke.Color = Color3.fromRGB(255, 210, 130)
+        tstroke.Thickness = 2
+        tstroke.Transparency = 0.3
+        tstroke.Parent = thumb
+        -- pop-in
+        pcall(function()
+            local sc = Instance.new("UIScale")
+            sc.Scale = 0.3
+            sc.Parent = thumb
+            TweenKG:Create(sc, TweenInfo.new(0.5, Enum.EasingStyle.Back,
+                Enum.EasingDirection.Out), { Scale = 1 }):Play()
+        end)
+        pcall(function()
+            if lpKG then
+                local img, ready = PlayersKG:GetUserThumbnailAsync(lpKG.UserId,
+                    Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
+                if ready and type(img) == "string" and img ~= "" then thumb.Image = img end
+            end
+        end)
+        lbl("Welcome back,", 192, 14, Color3.fromRGB(200, 170, 255))
+        local nm = lpKG and (lpKG.DisplayName ~= "" and lpKG.DisplayName or lpKG.Name) or "?"
+        lbl(nm, 210, 22, Color3.new(1, 1, 1))
+        lbl("@" .. (lpKG and lpKG.Name or "?"), 236, 14, Color3.fromRGB(160, 160, 170))
+        local box = Instance.new("TextBox")
+        box.Name = "KeyBox"
+        box.Size = UDim2.new(1, -32, 0, 42)
+        box.Position = UDim2.new(0, 16, 0, 268)
+        box.BackgroundColor3 = Color3.fromRGB(12, 7, 24)
+        box.BorderSizePixel = 0
+        box.Font = Enum.Font.Code
+        box.TextSize = 12
+        box.PlaceholderText = "Enter key..."
+        box.PlaceholderColor3 = Color3.fromRGB(120, 110, 140)
+        box.Text = ""
+        box.TextColor3 = Color3.new(1, 1, 1)
+        box.TextXAlignment = Enum.TextXAlignment.Center
+        box.TextTruncate = Enum.TextTruncate.AtEnd
+        box.ClearTextOnFocus = false
+        box.Parent = card
+        local bc = Instance.new("UICorner")
+        bc.CornerRadius = UDim.new(0, 8)
+        bc.Parent = box
+        -- masked: real key lives in a var, box shows bullets only.
+        -- clipped inside the box, never leaves it.
+        local realKG = ""
+        local maskingKG = false
+        box:GetPropertyChangedSignal("Text"):Connect(function()
+            if maskingKG then return end
+            local shown = box.Text
+            local bullets = 0
+            for _ in string.gmatch(shown, "•") do bullets += 1 end
+            local fresh = string.gsub(shown, "•", "")
+            if fresh == "" then
+                realKG = string.sub(realKG, 1, bullets)
+            else
+                realKG = string.sub(realKG, 1, bullets) .. fresh
+            end
+            maskingKG = true
+            box.Text = string.rep("•", #realKG)
+            pcall(function() box.CursorPosition = #box.Text + 1 end)
+            maskingKG = false
+        end)
+        local go = Instance.new("TextButton")
+        go.Size = UDim2.new(1, -32, 0, 46)
+        go.Position = UDim2.new(0, 16, 0, 320)
+        go.BackgroundColor3 = Color3.fromRGB(120, 60, 200)
+        go.BorderSizePixel = 0
+        go.Font = Enum.Font.GothamBlack
+        go.TextSize = 16
+        go.Text = "REDEEM"
+        go.TextColor3 = Color3.new(1, 1, 1)
+        go.AutoButtonColor = true
+        go.Parent = card
+        local gc = Instance.new("UICorner")
+        gc.CornerRadius = UDim.new(0, 10)
+        gc.Parent = go
+        local gg = Instance.new("UIGradient")
+        gg.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 60, 200)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 110, 255)),
+        })
+        gg.Rotation = 90
+        gg.Parent = go
+        local status = lbl("One key · one device · permanent", 376, 13, Color3.fromRGB(255, 210, 130))
+        -- loading dots while verifying
+        local verifyingKG = false
+        task.spawn(function()
+            local i = 0
+            while card.Parent do
+                task.wait(0.4)
+                if verifyingKG then
+                    i = (i % 3) + 1
+                    local dots = (i == 1) and "." or ((i == 2) and ".." or "...")
+                    pcall(function()
+                        status.Text = "Verifying" .. dots
+                        status.TextColor3 = Color3.fromRGB(200, 170, 255)
+                    end)
+                end
+            end
+        end)
+        local function setStatus(t, bad)
+            verifyingKG = false
+            status.Text = t
+            status.TextColor3 = bad and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(255, 210, 130)
+            -- shake on error
+            if bad then
+                pcall(function()
+                    local x0 = card.Position.X.Offset
+                    for _, dx in ipairs({ -8, 8, -5, 5, 0 }) do
+                        card.Position = UDim2.new(0.5, -200 + dx, 0.5, -250)
+                        task.wait(0.04)
+                    end
+                    card.Position = UDim2.new(0.5, -200, 0.5, -250)
+                end)
+            end
+        end
+        local doneKG = false
+        local function tryRedeem()
+            if doneKG or verifyingKG then return end
+            local k = keyNorm(realKG ~= "" and realKG or box.Text)
+            if k == "" then setStatus("Paste your key first.", true) return end
+            verifyingKG = true
+            task.wait(0.9) -- premium beat: let the dots run --
+            if not HUB_KEYS[k] then setStatus("Invalid key.", true) return end
+            local st = keyRead()
+            if st and st.key and keyNorm(st.key) ~= k then
+                setStatus("This device is bound to another key.", true)
+                return
+            end
+            if st and st.hwid and st.hwid ~= hwidKG and keyNorm(st.key) == k then
+                setStatus("Key is bound to another device.", true)
+                return
+            end
+            keyWrite(k, hwidKG)
+            doneKG = true
+            verifyingKG = false
+            getgenv()._HubKeyPassed = true  -- never ask again this session --
+            status.Text = "Welcome back."
+            status.TextColor3 = Color3.fromRGB(140, 255, 170)
+            pcall(function()
+                TweenKG:Create(go, TweenInfo.new(0.3),
+                    { BackgroundColor3 = Color3.fromRGB(60, 180, 90) }):Play()
+            end)
+        end
+        go.MouseButton1Click:Connect(tryRedeem)
+        box.FocusLost:Connect(function(enter) if enter then tryRedeem() end end)
+        -- stored key but new device/file copied over: handled above by reject.
+        -- no FS functions at all: session-only pass still requires the key.
+        while not doneKG do task.wait(0.1) end
+        -- success glide-out
+        pcall(function()
+            TweenKG:Create(card, TweenInfo.new(0.45, Enum.EasingStyle.Quad,
+                Enum.EasingDirection.In),
+                { Position = UDim2.new(0.5, -200, 1, 20) }):Play()
+            TweenKG:Create(dim, TweenInfo.new(0.45),
+                { BackgroundTransparency = 1 }):Play()
+        end)
+        task.wait(0.5)
+        pcall(function() sg:Destroy() end)
+        -- belt and suspenders: a late sweep guarantees no stuck gate.
+        task.delay(2, function()
+            pcall(function()
+                for _, g in ipairs(cgKG:GetChildren()) do
+                    if g.Name == "_HubKeyGate" then g:Destroy() end
+                end
+            end)
+        end)
+    end
+    end -- close: if not passedKG (session bypass else)
+end
 
 
 -- ?"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"? ?0  GUARD ?"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"?
@@ -407,7 +1294,7 @@ local DEFAULT_CFG = {
     RageVoidSelfGuard = true,  -- lift HRP for the OOB frame --
     RageKatanaBuffer  = 0.35,  -- extra hold-fire after deflect window --
     RageFireOrigin    = "Head", -- Head | Torso | HRP | Camera (no plant) --
-    -- -- Rage position modes: Off | Sky | Behind | Underground | Fly
+    -- -- Rage position modes: Off | Sky | Behind | Underground | Fly | Mixture
     RagePosMode       = "Off",
     RageAnywhere      = false,   -- v21: fire ragebot outside of duels (lobby/FFA/practice) --
     RageAlwaysBackstab = true,  -- behind-the-back plant, no knife needed --
@@ -2063,6 +2950,31 @@ function findAimTarget(cam)
         end
         return false
     end
+    -- v22 FIX: build a set of who we're actually dueling so we never lock
+    -- onto a lobby bystander when AimDuelOnly is active. Only the players
+    -- listed in CurrentDuelSubject.Duelers (excluding ourselves) are valid
+    -- targets while inside a duel. When not in a duel, or AimDuelOnly is
+    -- off, the set is nil and every scan runs unrestricted.
+    local _duelTargetSet = nil
+    if (Cfg.AimDuelOnly ~= false) and not Cfg.AimAnywhere then
+        local sc2 = getSpectate()
+        local duelNow = sc2 and sc2.CurrentDuelSubject
+        if duelNow and duelNow.Duelers then
+            local meDueling2 = false
+            for _, du in pairs(duelNow.Duelers) do
+                if du.Player == LP then meDueling2 = true break end
+            end
+            if meDueling2 then
+                _duelTargetSet = {}
+                for _, du in pairs(duelNow.Duelers) do
+                    if du.Player and du.Player ~= LP then
+                        _duelTargetSet[du.Player] = true
+                    end
+                end
+            end
+        end
+    end
+
     local function runPasses(strict)
         -- Pass 1: FighterController
         local fc = getFC()
@@ -2073,6 +2985,8 @@ function findAimTarget(cam)
             if fObj.IsLocalPlayer or fObj._destroyed then continue end
             if fObj.Player and isDeflecting(fObj.Player) then continue end
             if fObj.Player and aimFriendListed(fObj.Player) then continue end
+            -- v22: duel-only filter -- skip fighters who aren't our dueler
+            if _duelTargetSet and fObj.Player and not _duelTargetSet[fObj.Player] then continue end
             if teamSkipFC(fObj, myTeam, strict) then continue end
             local entity = fObj.Entity
             if not entity then continue end
@@ -2090,6 +3004,9 @@ function findAimTarget(cam)
         for _, p in ipairs(Players:GetPlayers()) do
             if p == LP then continue end
             if isDeflecting(p) then continue end
+            -- v22: duel-only filter on Players pass too
+            if _duelTargetSet and not _duelTargetSet[p] then continue end
+            if not isEnemy(p) then skippedTeam = true continue end
             if teamSkipP(p, strict) then continue end
             local model = p.Character
             if not (model and modelAlive(model)) then continue end
@@ -2412,7 +3329,7 @@ function paintAimOverlays(cam, cx, cy, aimPart, sp, on)
             cx, cy = ml.X, ml.Y
         end)
     end
-    local showFov = Cfg.AimShowFOV
+    local showFov = Cfg.AimShowFOV and not getgenv()._HubFOVHidden
     if Cfg.AimFOVKeyOnly then showFov = showFov and aimKeyActive() end
     local thick = math.clamp(Cfg.AimFOVThickness or 2, 1, 3)
     local fcol = aimPart
@@ -3491,24 +4408,45 @@ local function rageReach()
 end
 
 
--- Fly-follow: hover in front of the enemy at head height, strafing
--- left/right + forward drift on a loop, face locked onto their head.
--- Persistent (no per-shot restore); rageFlyRestore parks you back on
--- target loss, toggle-off, or duel end.
+-- Fly-follow: fast arc orbit around the TARGET staying behind/sides only.
+-- Front 90° arc is avoided so we never appear in their camera.
+-- v22: speed raised from 7.5 to 14 rad/s (~0.7s per back-arc sweep).
+-- Arc spans π*0.6 to π*1.4 in the target's LOCAL space (behind + sides).
+local _FLY_ORBIT_R   = 4.0    -- studs radius (inside melee reach, server-valid)
+local _FLY_ORBIT_SPD = 14.0   -- rad/s -- v22: was 7.5, much faster now
+local _FLY_ORBIT_Y   = 0.4    -- height above enemy head centre
 local function rageFlyTick(targetPlayer, targetRoot, targetHead)
     local char = LP.Character
     local myRoot = char and char:FindFirstChild("HumanoidRootPart")
     if not (myRoot and targetRoot and targetHead) then return false end
-    local t = tick()
-    local orbit = Vector3.new(math.sin(t * 2.1) * 6, 0, math.cos(t * 1.3) * 3)
-    local want = targetHead.Position
-        + Vector3.new(targetRoot.CFrame.LookVector.X, 0, targetRoot.CFrame.LookVector.Z).Unit * 7
-        + Vector3.new(0, 1.5, 0) + orbit
-    if want.Y < rageKillFloor() + 6 then want = Vector3.new(want.X, rageKillFloor() + 6, want.Z) end
     if not getgenv()._HubFlyHome then
         getgenv()._HubFlyHome = myRoot.CFrame
     end
-    myRoot.CFrame = CFrame.lookAt(want, targetHead.Position)
+    local t = tick()
+    -- v22: arc oscillates across the back-half only.
+    -- raw angle = time * speed, mapped to [π*0.55 .. π*1.45] via sine wave.
+    -- This keeps us strictly behind and to both sides, never stepping in front.
+    local rawAngle = t * _FLY_ORBIT_SPD
+    local arcCenter = math.pi          -- directly behind
+    local arcHalf   = math.pi * 0.45  -- ±81° from behind = covers left-back + right-back
+    local localAngle = arcCenter + math.sin(rawAngle) * arcHalf
+
+    local headPos = targetHead.Position
+    -- transform localAngle into world space using enemy's look direction
+    local fwd = targetRoot.CFrame.LookVector
+    fwd = Vector3.new(fwd.X, 0, fwd.Z)
+    if fwd.Magnitude < 0.05 then fwd = Vector3.new(0, 0, 1) end
+    fwd = fwd.Unit
+    local right = Vector3.new(fwd.Z, 0, -fwd.X) -- perpendicular on XZ plane
+
+    -- position in enemy's local XZ then back to world
+    local ox = (math.cos(localAngle) * right + math.sin(localAngle) * fwd) * _FLY_ORBIT_R
+    local want = Vector3.new(headPos.X + ox.X, headPos.Y + _FLY_ORBIT_Y, headPos.Z + ox.Z)
+
+    -- hard void guard: floor + 10 studs of margin, no exceptions
+    local floor = rageKillFloor() + 10
+    if want.Y < floor then want = Vector3.new(want.X, floor, want.Z) end
+    myRoot.CFrame = CFrame.lookAt(want, headPos)
     myRoot.Velocity = Vector3.zero
     myRoot.RotVelocity = Vector3.zero
     return true
@@ -3586,6 +4524,32 @@ local function rageDesyncPlant(targetPlayer, targetRoot, targetHead)
         local d = math.clamp(dist, 3, math.max(rageReach(), 7))
         if Cfg.RageAlwaysBackstab ~= false then d = math.min(d, 7) end
         desyncPos = targetRoot.Position - back * d + Vector3.new(0, 1, 0)
+    elseif mode == "Mixture" then
+        -- v22 MIXTURE: cycle Sky -> Underground -> Fly every 3 seconds.
+        -- Sky and Underground are desync plants; Fly delegates to rageFlyTick
+        -- (same as the dedicated Fly mode). Three sub-modes rotate automatically
+        -- so enemies can't predict which angle the shot comes from.
+        local mixPhase = math.floor(tick() / 3) % 3  -- 0=Sky, 1=Underground, 2=Fly
+        if mixPhase == 2 then
+            -- Fly sub-mode: hand off to the orbit tick
+            if rageFlyTick(targetPlayer, targetRoot, targetHead) then
+                return CFrame.lookAt(myRoot.Position, targetHead.Position)
+            end
+            return nil
+        elseif mixPhase == 0 then
+            -- Sky sub-mode: 55 studs above enemy
+            desyncPos = targetRoot.Position + Vector3.new(0, 55, 0)
+        else
+            -- Underground sub-mode: below their feet
+            local feet = targetRoot.Position - Vector3.new(0, 4, 0)
+            local underPos = feet - Vector3.new(0, 3, 0)
+            if underPos.Y < rageKillFloor() + 4 then return nil end
+            local flatCF = CFrame.lookAt(underPos, feet) * CFrame.Angles(math.pi / 2, 0, 0)
+            local snapCF2, snapVel2, snapRot2 = myRoot.CFrame, myRoot.Velocity, myRoot.RotVelocity
+            myRoot.CFrame = flatCF
+            rageGhostRestore(myRoot, snapCF2, snapVel2, snapRot2)
+            return flatCF
+        end
     elseif mode == "Side" then
         local right = targetRoot.CFrame.RightVector
         right = Vector3.new(right.X, 0, right.Z)
@@ -8071,8 +9035,238 @@ function applyMisc()
             local target = Cfg.MorphUsername
             task.delay(1.5, function() morphIntoAvatar(target, true) end)
         end
+        -- origin hold survives death: re-root the fresh spawn
+        if Cfg.CharOriginCamera then
+            task.delay(1, function()
+                pcall(function()
+                    if not Cfg.CharOriginCamera then return end
+                    local nc = LP.Character
+                    local nr = nc and nc:FindFirstChild("HumanoidRootPart")
+                    if nr then getgenv()._HubCharOriginCF = nr.CFrame end
+                end)
+            end)
+        end
     end)
     table.insert(_miscConns, c2)
+end
+
+
+-- Staff runtime list: HUB_STAFF base + Shade External/staff.dat extras.
+-- Add as many usernames as you want, in-menu (Settings > Staff Access).
+function hubStaffGet()
+    local out = { owner = {}, coowner = {}, premium = {} }
+    pcall(function()
+        local st = HUB_STAFF
+        if type(st) == "table" then
+            for _, tier in ipairs({ "owner", "coowner", "premium" }) do
+                if type(st[tier]) == "table" then
+                    for _, n in ipairs(st[tier]) do table.insert(out[tier], tostring(n)) end
+                end
+            end
+        end
+    end)
+    pcall(function()
+        if type(isfile) == "function" and isfile("Shade External/staff.dat") then
+            local t = HttpService:JSONDecode(readfile("Shade External/staff.dat"))
+            if type(t) == "table" then
+                for _, tier in ipairs({ "owner", "coowner", "premium" }) do
+                    if type(t[tier]) == "table" then
+                        for _, n in ipairs(t[tier]) do table.insert(out[tier], tostring(n)) end
+                    end
+                end
+            end
+        end
+    end)
+    return out
+end
+function hubStaffAdd(tier, name)
+    name = tostring(name or ""):gsub("%s+", "")
+    if name == "" then return false end
+    tier = tostring(tier or "")
+    if tier ~= "owner" and tier ~= "coowner" and tier ~= "premium" then return false end
+    local cur = { owner = {}, coowner = {}, premium = {} }
+    pcall(function()
+        if type(isfile) == "function" and isfile("Shade External/staff.dat") then
+            local t = HttpService:JSONDecode(readfile("Shade External/staff.dat"))
+            if type(t) == "table" then
+                for _, tr in ipairs({ "owner", "coowner", "premium" }) do
+                    if type(t[tr]) == "table" then cur[tr] = t[tr] end
+                end
+            end
+        end
+    end)
+    local want = string.lower(name)
+    for _, n in ipairs(cur[tier]) do
+        if string.lower(tostring(n)) == want then return true end
+    end
+    table.insert(cur[tier], name)
+    pcall(function()
+        if type(writefile) == "function" then
+            if type(makefolder) == "function" then makefolder("Shade External") end
+            writefile("Shade External/staff.dat", HttpService:JSONEncode(cur))
+        end
+    end)
+    getgenv()._HubStaffMerged = hubStaffGet()
+    pcall(function() hubStaffPaint() end)
+    return true
+end
+function hubStaffClear(tier)
+    tier = tostring(tier or "")
+    if tier ~= "owner" and tier ~= "coowner" and tier ~= "premium" then return end
+    local cur = { owner = {}, coowner = {}, premium = {} }
+    pcall(function()
+        if type(isfile) == "function" and isfile("Shade External/staff.dat") then
+            local t = HttpService:JSONDecode(readfile("Shade External/staff.dat"))
+            if type(t) == "table" then
+                for _, tr in ipairs({ "owner", "coowner", "premium" }) do
+                    if type(t[tr]) == "table" then cur[tr] = t[tr] end
+                end
+            end
+        end
+    end)
+    cur[tier] = {}
+    pcall(function()
+        if type(writefile) == "function" then
+            writefile("Shade External/staff.dat", HttpService:JSONEncode(cur))
+        end
+    end)
+    getgenv()._HubStaffMerged = hubStaffGet()
+    pcall(function() hubStaffPaint() end)
+end
+function hubStaffTierNow() -- owner/coowner/premium/nil for local player --
+    -- key-granted tier first (coolkean key = owner on its device) --
+    if getgenv()._HubKeyTier == "owner" or getgenv()._HubKeyTier == "coowner"
+        or getgenv()._HubKeyTier == "premium" then
+        return getgenv()._HubKeyTier
+    end
+    local lp = Players.LocalPlayer
+    if not lp then return nil end
+    local nm, dp = string.lower(lp.Name or ""), string.lower(lp.DisplayName or "")
+    local all = hubStaffGet()
+    for _, tier in ipairs({ "owner", "coowner", "premium" }) do
+        for _, n in ipairs(all[tier]) do
+            local want = string.lower(tostring(n or ""))
+            if want ~= "" and want ~= "yournamehere" and (want == nm or want == dp) then
+                return tier
+            end
+        end
+    end
+    return nil
+end
+-- Ban hammer (Admin tab, owner/co-owner only): banned usernames never pass
+-- the gate again. Persists in Shade External/bans.dat.
+function hubBanGet()
+    local out = {}
+    pcall(function()
+        if type(isfile) == "function" and isfile("Shade External/bans.dat") then
+            local t = HttpService:JSONDecode(readfile("Shade External/bans.dat"))
+            if type(t) == "table" and type(t.names) == "table" then
+                for _, n in ipairs(t.names) do table.insert(out, tostring(n)) end
+            end
+        end
+    end)
+    return out
+end
+function hubBanSave(list)
+    pcall(function()
+        if type(writefile) == "function" then
+            if type(makefolder) == "function" then makefolder("Shade External") end
+            writefile("Shade External/bans.dat", HttpService:JSONEncode({ names = list }))
+        end
+    end)
+end
+function hubBanAdd(name)
+    name = tostring(name or ""):gsub("%s+", "")
+    if name == "" then return false end
+    local list = hubBanGet()
+    local want = string.lower(name)
+    for _, n in ipairs(list) do
+        if string.lower(n) == want then return true end
+    end
+    table.insert(list, name)
+    hubBanSave(list)
+    pcall(function() hubBanPaint() end)
+    return true
+end
+function hubBanRemove(name)
+    name = tostring(name or ""):gsub("%s+", "")
+    if name == "" then return false end
+    local list = hubBanGet()
+    local want = string.lower(name)
+    local kept = {}
+    for _, n in ipairs(list) do
+        if string.lower(n) ~= want then table.insert(kept, n) end
+    end
+    hubBanSave(kept)
+    pcall(function() hubBanPaint() end)
+    return true
+end
+function hubBanPaint()
+    local lbl = getgenv()._HubBanLbl
+    if not lbl then return end
+    local list = hubBanGet()
+    local txt = #list > 0 and table.concat(list, ", ") or "(nobody banned)"
+    if #txt > 220 then txt = txt:sub(1, 220) .. "..." end
+    pcall(function() lbl:SetText(txt) end)
+end
+function hubStaffPaint() -- list labels show every name on every tier --    local all = hubStaffGet()
+    for _, tier in ipairs({ "owner", "coowner", "premium" }) do
+        local lbl = getgenv()._HubStaffLbl and getgenv()._HubStaffLbl[tier]
+        if lbl then
+            local names = {}
+            for _, n in ipairs(all[tier]) do table.insert(names, tostring(n)) end
+            local txt = #names > 0 and table.concat(names, ", ") or "(empty)"
+            if #txt > 220 then txt = txt:sub(1, 220) .. "..." end
+            pcall(function() lbl:SetText(txt) end)
+        end
+    end
+end
+-- Origin Hold driver (shared by the Ragebot button + Players toggle):
+-- freezes the real HRP at the origin, pulls the camera far so you still
+-- see the map (Origin Peek), recaptures on respawn via applyMisc.
+function hubOriginHold(v)
+    v = v and true or false
+    Cfg.CharOriginCamera = v
+    if v then
+        if getgenv()._HubOriginSaved == nil then
+            getgenv()._HubOriginSaved = {
+                third = Cfg.CharThirdPerson,
+                dist = Cfg.CharThirdDist,
+            }
+        end
+        Cfg.CharThirdPerson = true
+        Cfg.CharThirdDist = 60
+        Cfg.VisThirdPerson = true
+        Cfg.VisThirdDist = 60
+        pcall(function() setThirdPerson(true) end)
+    else
+        getgenv()._HubCharOriginCF = nil
+        local sv = getgenv()._HubOriginSaved
+        getgenv()._HubOriginSaved = nil
+        if type(sv) == "table" then
+            Cfg.CharThirdPerson = sv.third
+            Cfg.CharThirdDist = sv.dist
+            Cfg.VisThirdPerson = sv.third
+            Cfg.VisThirdDist = sv.dist
+            pcall(function() setThirdPerson(sv.third) end)
+        end
+    end
+    applyMisc()
+    cfgSave()
+    pcall(function()
+        local opts = getgenv().Options
+        if opts then
+            local a = opts.RageOriginHold
+            if a and a.SetValue then a:SetValue(v) end
+            local b = opts.CharOriginCamera
+            if b and b.SetValue then b:SetValue(v) end
+            local c = opts.CharThirdPerson
+            if c and c.SetValue then c:SetValue(Cfg.CharThirdPerson) end
+        end
+    end)
+    if v then
+        pcall(function() hubNotify("Origin Hold: rooted — camera free, rage from ghost", 3, "hit") end)
+    end
 end
 
 
@@ -11088,6 +12282,88 @@ local Tabs = {
 getgenv()._HubTabs = Tabs
 
 
+-- Admin tab: owner/co-owner only. Everyone else never sees it.
+do
+    local tierNow = nil
+    pcall(function() tierNow = hubStaffTierNow() end)
+    if tierNow == "owner" or tierNow == "coowner" then
+        local okAT, atab = pcall(function() return Window:AddTab("Admin") end)
+        if okAT and atab then
+            Tabs.Admin = atab
+            local BanGroup = atab:AddLeftGroupbox("Ban Hammer")
+            BanGroup:AddLabel("Banned usernames never pass the gate again.")
+            BanGroup:AddInput("BanAdd", {
+                Text        = "Ban Username",
+                Default     = "",
+                Placeholder = "username, Enter = ban forever",
+                Callback    = function(v)
+                    v = tostring(v or ""):gsub("%s+", "")
+                    if v == "" then return end
+                    if hubBanAdd(v) then
+                        pcall(function() Library:Notify("Banned: " .. v, 3) end)
+                    end
+                    local o = getgenv().Options and getgenv().Options.BanAdd
+                    if o and o.SetValue then pcall(function() o:SetValue("") end) end
+                end,
+            })
+            BanGroup:AddButton({
+                Text = "BAN (uses name above)",
+                Func = function()
+                    local o = getgenv().Options and getgenv().Options.BanAdd
+                    local v = o and tostring(o.Value or ""):gsub("%s+", "") or ""
+                    if v == "" then
+                        pcall(function() Library:Notify("Type a username first", 2) end)
+                        return
+                    end
+                    if hubBanAdd(v) then
+                        pcall(function() Library:Notify("Banned: " .. v .. " (even offline)", 3) end)
+                    end
+                    if o and o.SetValue then pcall(function() o:SetValue("") end) end
+                end,
+            })
+            BanGroup:AddButton({
+                Text = "UNBAN (uses name above)",
+                Func = function()
+                    local o = getgenv().Options and getgenv().Options.BanAdd
+                    local v = o and tostring(o.Value or ""):gsub("%s+", "") or ""
+                    if v == "" then
+                        pcall(function() Library:Notify("Type a username first", 2) end)
+                        return
+                    end
+                    if hubBanRemove(v) then
+                        pcall(function() Library:Notify("Unbanned: " .. v, 3) end)
+                    end
+                    if o and o.SetValue then pcall(function() o:SetValue("") end) end
+                end,
+            })
+            BanGroup:AddInput("BanRemove", {
+                Text        = "Unban Username",
+                Default     = "",
+                Placeholder = "username, Enter = unban",
+                Callback    = function(v)
+                    v = tostring(v or ""):gsub("%s+", "")
+                    if v == "" then return end
+                    if hubBanRemove(v) then
+                        pcall(function() Library:Notify("Unbanned: " .. v, 3) end)
+                    end
+                    local o = getgenv().Options and getgenv().Options.BanRemove
+                    if o and o.SetValue then pcall(function() o:SetValue("") end) end
+                end,
+            })
+            BanGroup:AddLabel("Banned:")
+            do
+                local _bl = BanGroup:AddLabel("...", true)
+                getgenv()._HubBanLbl = _bl
+            end
+            task.spawn(function()
+                task.wait(1)
+                pcall(function() hubBanPaint() end)
+            end)
+        end
+    end
+end
+
+
 -- ?"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"? ?35  TAB: AIMBOT ?"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"?
 
 
@@ -11272,9 +12548,9 @@ RageGroup:AddToggle("RageWaitImmune", {
 RageGroup:AddDropdown("RagePosMode", {
     Text    = "Position Mode",
     Default = Cfg.RagePosMode or "Off",
-    Values  = { "Off", "Sky", "Behind", "Underground", "Fly", "Side", "Camera" },
+    Values  = { "Off", "Sky", "Behind", "Underground", "Fly", "Mixture", "Side", "Camera" },
     Callback = function(v)
-        if (Cfg.RagePosMode or "Off") == "Fly" and v ~= "Fly" then rageFlyRestore() end
+        if (Cfg.RagePosMode or "Off") == "Fly" and v ~= "Fly" and v ~= "Mixture" then rageFlyRestore() end
         Cfg.RagePosMode = v
     end,
 })
@@ -11283,6 +12559,7 @@ RageGroup:AddDropdown("RagePosMode", {
 RageGroup:AddLabel("Sky: shoot down from above. Behind: back-stab plant.")
 RageGroup:AddLabel("Side: alternating flanks. Camera: fire from view.")
 RageGroup:AddLabel("Underground: up at the feet. Fly: hover + follow.")
+RageGroup:AddLabel("Mixture: Sky + Underground + Fly cycling every 3s.")
 
 
 RageGroup:AddToggle("RageOriginHold", {
@@ -11290,14 +12567,7 @@ RageGroup:AddToggle("RageOriginHold", {
     Default = Cfg.CharOriginCamera,
     Tooltip = "Real hitbox locked at origin (spawn). Visual/camera free. Enemies see you rooted.",
     Callback = function(v)
-        Cfg.CharOriginCamera = v
-        if not v then getgenv()._HubCharOriginCF = nil end
-        applyMisc()
-        cfgSave()
-        pcall(function()
-            local o = getgenv().Options and getgenv().Options.CharOriginCamera
-            if o and o.SetValue then o:SetValue(v) end
-        end)
+        hubOriginHold(v)
     end,
 })
 local TrigGroup = Tabs.Aim:AddLeftGroupbox("Triggerbot")
@@ -11913,6 +13183,22 @@ AimVisGroup:AddToggle("AimShowFOV", {
     Callback = function(v)
         Cfg.AimShowFOV = v
         if not v then fovCircle.Visible = false end
+        -- if re-enabling, clear the hidden override so it draws again
+        if v then getgenv()._HubFOVHidden = false end
+    end,
+})
+
+
+-- Hide FOV Circle: circle stays functional (selection still uses it)
+-- but invisible. Independent of the Show toggle so you can keep it
+-- enabled for gameplay logic while hiding the ring visually.
+AimVisGroup:AddButton({
+    Text = "Hide FOV Circle",
+    Func = function()
+        getgenv()._HubFOVHidden = not getgenv()._HubFOVHidden
+        pcall(function() fovCircle.Visible = false end)
+        local state = getgenv()._HubFOVHidden and "hidden" or "visible"
+        pcall(function() Library:Notify("FOV circle: " .. state .. " (logic unchanged)", 2) end)
     end,
 })
 
@@ -17322,14 +18608,7 @@ CharCamGroup:AddToggle("CharOriginCamera", {
     Default = Cfg.CharOriginCamera,
     Tooltip = "Local: you walk and aim normally. Enemies/server: you appear rooted at spawn.",
     Callback = function(v)
-        Cfg.CharOriginCamera = v
-        if not v then getgenv()._HubCharOriginCF = nil end
-        applyMisc()
-        cfgSave()
-        pcall(function()
-            local o = getgenv().Options and getgenv().Options.RageOriginHold
-            if o and o.SetValue then o:SetValue(v) end
-        end)
+        hubOriginHold(v)
     end,
 })
 
@@ -17798,6 +19077,45 @@ CfgGroup:AddButton({
     Func = function()
     cfgReset()
 end})
+
+
+local StaffGroup = Tabs.Settings:AddRightGroupbox("Staff Access")
+
+
+StaffGroup:AddLabel("Usernames skip the key. As many as you want.")
+do
+    getgenv()._HubStaffLbl = getgenv()._HubStaffLbl or {}
+    local tiers = { { "owner", "Owner" }, { "coowner", "Co-Owner" }, { "premium", "Premium" } }
+    for _, e in ipairs(tiers) do
+        local flag, title = e[1], e[2]
+        StaffGroup:AddInput("StaffAdd_" .. flag, {
+            Text        = "Add " .. title,
+            Default     = "",
+            Placeholder = "username, Enter = add",
+            Callback    = function(v)
+                v = tostring(v or ""):gsub("%s+", "")
+                if v == "" then return end
+                if hubStaffAdd(flag, v) then
+                    pcall(function() Library:Notify(title .. " added: " .. v, 2) end)
+                end
+                local o = getgenv().Options and getgenv().Options["StaffAdd_" .. flag]
+                if o and o.SetValue then pcall(function() o:SetValue("") end) end
+            end,
+        })
+        StaffGroup:AddLabel(title .. ":")
+        local _sl = StaffGroup:AddLabel("...", true)
+        getgenv()._HubStaffLbl[flag] = _sl
+        StaffGroup:AddButton({
+            Text = "Clear " .. title,
+            Func = function()
+            hubStaffClear(flag)
+        end})
+    end
+    task.spawn(function()
+        task.wait(1)
+        pcall(function() hubStaffPaint() end)
+    end)
+end
 
 
 
