@@ -5613,6 +5613,30 @@ function resetWorldTexture() -- restore all textured parts --
         end
         getgenv()._HubTexSaved = nil
     end)
+    -- reset was restoring then instantly repainting: the per-frame tick saw
+    -- the config still set and re-textured everything. Clear the config so
+    -- reset STICKS until you set a texture again.
+    Cfg.WorldTextureFile = ""
+    Cfg.WorldTextureId = ""
+    Cfg.WorldTextureMat = "SmoothPlastic"
+    Cfg.WorldTextureShine = 0
+    Cfg.WorldTextureTintOn = false
+    pcall(function()
+        local opts = getgenv().Options
+        if opts then
+            local function setT(flag, val)
+                local o = opts[flag]
+                if o and o.SetValue then pcall(function() o:SetValue(val) end) end
+            end
+            setT("WorldTextureFile", "")
+            setT("WorldTextureId", "")
+            setT("WorldTextureMat", "SmoothPlastic")
+            setT("WorldTextureShine", 0)
+            setT("WorldTextureTintOn", false)
+        end
+    end)
+    cfgSave()
+    pcall(function() hubNotify("Texture reset: originals restored", 2, "hit") end)
 end
 
 
@@ -11259,6 +11283,23 @@ RageGroup:AddDropdown("RagePosMode", {
 RageGroup:AddLabel("Sky: shoot down from above. Behind: back-stab plant.")
 RageGroup:AddLabel("Side: alternating flanks. Camera: fire from view.")
 RageGroup:AddLabel("Underground: up at the feet. Fly: hover + follow.")
+
+
+RageGroup:AddToggle("RageOriginHold", {
+    Text    = "Character Origin (root at spawn)",
+    Default = Cfg.CharOriginCamera,
+    Tooltip = "Real hitbox locked at origin (spawn). Visual/camera free. Enemies see you rooted.",
+    Callback = function(v)
+        Cfg.CharOriginCamera = v
+        if not v then getgenv()._HubCharOriginCF = nil end
+        applyMisc()
+        cfgSave()
+        pcall(function()
+            local o = getgenv().Options and getgenv().Options.CharOriginCamera
+            if o and o.SetValue then o:SetValue(v) end
+        end)
+    end,
+})
 local TrigGroup = Tabs.Aim:AddLeftGroupbox("Triggerbot")
 
 
@@ -17285,6 +17326,10 @@ CharCamGroup:AddToggle("CharOriginCamera", {
         if not v then getgenv()._HubCharOriginCF = nil end
         applyMisc()
         cfgSave()
+        pcall(function()
+            local o = getgenv().Options and getgenv().Options.RageOriginHold
+            if o and o.SetValue then o:SetValue(v) end
+        end)
     end,
 })
 
