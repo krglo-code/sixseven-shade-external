@@ -279,7 +279,7 @@ local DEFAULT_CFG = {
     AimTeamCheck      = true,
     AimWallCheck      = false,
     AimShowFOV        = false,
-    AimShowSnap       = false,
+    AimShowSnap       = true,
     AimPrediction     = false,
     AimPredFactor     = 1.0,
     AimKey            = "MB2",
@@ -574,6 +574,9 @@ local DEFAULT_CFG = {
     WorldTextureMat   = "SmoothPlastic", -- map material with texture --
     WorldTextureMe    = true, -- also texture your character --
     WorldTextureMap   = true, -- texture the map --
+    WorldTextureShine = 0, -- reflectance 0-100 --
+    WorldTextureTintOn = false, -- tint parts --
+    WorldTextureTintR = 255, WorldTextureTintG = 255, WorldTextureTintB = 255,
     MenuAnim          = true,
     MenuAnimSpeed     = 6,
     MenuInstant       = true,  -- v10: minimize path: instant (no lag) vs animated --
@@ -1415,6 +1418,14 @@ function hubAimRate()
     -- floor: rate 2 feels dead (reads as "aimbot broken"), 5 stays alive
     return math.max(5, 2 + (sp / 100) ^ 1.5 * 38)
 end
+function hubAimRateLabel() -- live readout: proves the sliders drive the engine --
+    local lbl = getgenv()._HubRateLbl
+    if not lbl then return end
+    local sp = math.clamp(tonumber(Cfg.AimbotSpeed) or 50, 1, 100)
+    local sens = Cfg.AimbotSensitivity or hubAimSpeedToSens(sp)
+    local txt = string.format("Rate: speed %d / sens %.1f = %.1f deg/s", sp, sens, hubAimRate())
+    pcall(function() lbl:SetText(txt) end)
+end
 
 -- Single anchor shared by selection + FOV circle + movement.
 function hubAimAnchor(cam)
@@ -1670,10 +1681,12 @@ end
 function hitChanceOK()
     local hc = Cfg.AimHitChance or 100
     if hc >= 100 then return true end
+    local now = tick()
     local r = getgenv()._HubHitRoll
-    if r == nil then
+    if r == nil or (getgenv()._HubHitRollAt or 0) + 0.5 < now then
         r = math.random(1, 100)
         getgenv()._HubHitRoll = r
+        getgenv()._HubHitRollAt = now
     end
     return r <= hc
 end
@@ -2464,7 +2477,7 @@ function paintAimOverlays(cam, cx, cy, aimPart, sp, on)
     for _, o in ipairs({ lk1, lk2, lkb, lkc }) do if o then o.Visible = false end end
     if lki then lki.Visible = false end
     snapDot.Visible = false
-    if false then -- v5: lock cross/dot removed from aimbot
+    if Cfg.AimShowSnap ~= false then -- lock dot: visible proof of lock --
         local style = Cfg.AimLockStyle or "Dot"
         local pulse = 1
         if Cfg.AimLockPulse then pulse = 0.8 + 0.4 * math.abs(math.sin(tick() * 10.5)) end
@@ -3188,6 +3201,28 @@ end
 
 function patchItem(item, nowTick, slotNum)
     if type(item) ~= "table" or item._destroyed then return end
+    -- movement gadgets keep default behavior: zeroing their fields breaks
+    -- Jump Pad boost, Grappler pull, Warpstone teleport and the War Horn
+    -- cycle (which needs real cooldowns). Explicit per-weapon picks still apply.
+    local iname = ""
+    pcall(function() iname = string.lower(tostring(item.Name or "")) end)
+    local isMover = (string.find(iname, "jump pad", 1, true) or string.find(iname, "grappler", 1, true)
+        or string.find(iname, "warpstone", 1, true) or string.find(iname, "war horn", 1, true)
+        or string.find(iname, "warhorn", 1, true)) and true or false
+    local explicitPick = false
+    if isMover then
+        if type(Cfg.WeaponNoCDList) == "table" then
+            for n in pairs(Cfg.WeaponNoCDList) do
+                if string.lower(tostring(n)) == iname then explicitPick = true break end
+            end
+        end
+        if type(Cfg.WeaponNoRecoilList) == "table" and not explicitPick then
+            for n in pairs(Cfg.WeaponNoRecoilList) do
+                if string.lower(tostring(n)) == iname then explicitPick = true break end
+            end
+        end
+        if not explicitPick then return end
+    end
     if Cfg.WeaponNoSpread then hubZeroSpread(item) end
     -- v9 No Recoil: runs before + independent of the cooldown weapon scope
     if Cfg.WeaponNoRecoil or Cfg.WeaponNoRecoilThis then
@@ -3543,8 +3578,30 @@ local function rageDesyncPlant(targetPlayer, targetRoot, targetHead)
         rageGhostRestore(myRoot, snapCF, snapVel, snapRot)
         return flatCF
     elseif mode == "Behind" then
-        if dist > rageReach() then return nil end
-        desyncPos = rageBehindPos(targetRoot)
+        -- gateless: desync plants HRP instantly, reach only shapes offset
+        local back = targetRoot.CFrame.LookVector
+        back = Vector3.new(back.X, 0, back.Z)
+        if back.Magnitude < 0.05 then back = Vector3.new(0, 0, 1) end
+        back = back.Unit
+        local d = math.clamp(dist, 3, math.max(rageReach(), 7))
+        if Cfg.RageAlwaysBackstab ~= false then d = math.min(d, 7) end
+        desyncPos = targetRoot.Position - back * d + Vector3.new(0, 1, 0)
+    elseif mode == "Side" then
+        local right = targetRoot.CFrame.RightVector
+        right = Vector3.new(right.X, 0, right.Z)
+        if right.Magnitude < 0.05 then right = Vector3.new(1, 0, 0) end
+        right = right.Unit
+        local s = (getgenv()._HubDesyncSide or 1)
+        getgenv()._HubDesyncSide = -s
+        desyncPos = targetRoot.Position + right * (s * math.clamp(rageReach() * 0.6, 4, 10)) + Vector3.new(0, 1, 0)
+    elseif mode == "Camera" then
+        -- fire from your camera: body never moves, no ghost needed
+        local camNow = Workspace.CurrentCamera
+        if camNow then
+            getgenv()._HubDesyncOff = nil
+            return CFrame.lookAt(camNow.CFrame.Position, targetHead.Position)
+        end
+        return nil
     else -- Off: classic plant (+AlwaysBackstab behind plant inside reach)
         if (Cfg.RageAlwaysBackstab ~= false) and dist <= rageReach() then
             desyncPos = rageBehindPos(targetRoot)
@@ -5430,49 +5487,118 @@ function hubTextureProtected(inst) -- never texture vitals / hub parts --
     if okP and prot then return true end
     return false
 end
-function applyWorldTexture() -- map + you, reversible, never destroys --
-    pcall(function()
-        local tex = hubTextureWant()
-        local mat = Enum.Material.SmoothPlastic
-        pcall(function() mat = Enum.Material[Cfg.WorldTextureMat or "SmoothPlastic"] end)
-        local saved = getgenv()._HubTexSaved
-        if type(saved) ~= "table" then saved = {} getgenv()._HubTexSaved = saved end
-        if not tex and not Cfg.WorldTextureMat then return end
-        local function save(inst, prop, val) if saved[inst] == nil then saved[inst] = {} end if saved[inst][prop] == nil then saved[inst][prop] = val end end
-        if Cfg.WorldTextureMap ~= false then
-            for _, d in ipairs(Workspace:GetDescendants()) do
-                if hubTextureProtected(d) then continue end
-                local ch = LP.Character
-                if ch and d:IsDescendantOf(ch) and not Cfg.WorldTextureMe then continue end
-                if d:IsA("BasePart") then
-                    save(d, "Material", d.Material)
-                    pcall(function() d.Material = mat end)
-                    if tex and d:IsA("MeshPart") then
-                        save(d, "TextureID", d.TextureID)
-                        pcall(function() d.TextureID = tex end)
-                    end
-                end
-            end
-        end
-        if Cfg.WorldTextureMe ~= false then
+function applyWorldTexture() -- map + you, chunked + persistent, never destroys --
+    -- fast: 120 parts/frame budget, no full-sweep freeze. persistent: new
+    -- spawns textured on arrival, nothing ever reverts unless YOU reset.
+    hubTexWatch()
+    getgenv()._HubTexIdx = 0
+    getgenv()._HubTexList = nil
+end
+function hubTexWatch() -- new parts textured on arrival, zero scan cost --
+    if getgenv()._HubTexConn then return end
+    getgenv()._HubTexConn = Workspace.DescendantAdded:Connect(function(d)
+        pcall(function()
+            if not hubTexWantOn() then return end
+            if hubTextureProtected(d) then return end
             local ch = LP.Character
-            if ch then
-                for _, d in ipairs(ch:GetDescendants()) do
-                    if hubTextureProtected(d) then continue end
-                    if d:IsA("BasePart") then
-                        save(d, "Material", d.Material)
-                        pcall(function() d.Material = mat end)
-                    end
-                    if tex and (d:IsA("Decal") or d:IsA("Texture")) then
-                        save(d, "Texture", d.Texture)
-                        pcall(function() d.Texture = tex end)
-                    end
-                end
-            end
-        end
+            if ch and d:IsDescendantOf(ch) and Cfg.WorldTextureMe == false then return end
+            if ch and not d:IsDescendantOf(ch) and Cfg.WorldTextureMap == false then return end
+            hubTexApplyOne(d)
+        end)
     end)
 end
+function hubTexWantOn() -- any texture work configured? --
+    if tostring(Cfg.WorldTextureFile or "") ~= "" then return true end
+    if tostring(Cfg.WorldTextureId or "") ~= "" then return true end
+    if (Cfg.WorldTextureMat or "SmoothPlastic") ~= "SmoothPlastic" then return true end
+    if (Cfg.WorldTextureShine or 0) > 0 then return true end
+    if Cfg.WorldTextureTintOn then return true end
+    return false
+end
+function hubTexSave(d, prop) -- bounded originals for Reset only; never auto-reverts --
+    local saved = getgenv()._HubTexSaved
+    if type(saved) ~= "table" then saved = {} getgenv()._HubTexSaved = saved end
+    local e = saved[d]
+    if e == nil then
+        e = {}
+        saved[d] = e
+    end
+    if e[prop] ~= nil then return e[prop] end
+    local v = nil
+    pcall(function() v = d[prop] end)
+    e[prop] = v
+    return v
+end
+function hubTexApplyOne(d) -- one part, state-only writes when stale --
+    local tex = hubTextureWant()
+    local mat = Enum.Material.SmoothPlastic
+    pcall(function() mat = Enum.Material[Cfg.WorldTextureMat or "SmoothPlastic"] end)
+    local shine = math.clamp(Cfg.WorldTextureShine or 0, 0, 100) / 100
+    local tintOn = Cfg.WorldTextureTintOn and true or false
+    local tint = tintOn and Color3.fromRGB(Cfg.WorldTextureTintR or 255, Cfg.WorldTextureTintG or 255, Cfg.WorldTextureTintB or 255) or nil
+    if d:IsA("BasePart") then
+        hubTexSave(d, "Material")
+        pcall(function() if d.Material ~= mat then d.Material = mat end end)
+        if tex and d:IsA("MeshPart") then
+            hubTexSave(d, "TextureID")
+            pcall(function() if d.TextureID ~= tex then d.TextureID = tex end end)
+        end
+        if shine > 0 then
+            hubTexSave(d, "Reflectance")
+            pcall(function() if math.abs(d.Reflectance - shine) > 0.02 then d.Reflectance = shine end end)
+        end
+        if tint then
+            hubTexSave(d, "Color")
+            pcall(function() if d.Color ~= tint then d.Color = tint end end)
+        end
+    elseif tex and (d:IsA("Decal") or d:IsA("Texture")) then
+        hubTexSave(d, "Texture")
+        pcall(function() if d.Texture ~= tex then d.Texture = tex end end)
+    end
+end
+function hubTexTick() -- 120/frame incremental sweep, resumes where it stopped --
+    if not hubTexWantOn() then return end
+    -- lag guard: full-list rebuilds pause while frames are bad or potato
+    -- recovery is active. Styling never causes the slowdown.
+    if _hubLagSkip then return end
+    if (getgenv()._HubPerfLvl or 0) >= 1 then return end
+    local T = getgenv()._HubTexList
+    if type(T) ~= "table" or (getgenv()._HubTexRescan or 0) + 30 < tick() then
+        T = {}
+        getgenv()._HubTexList = T
+        getgenv()._HubTexRescan = tick()
+        getgenv()._HubTexIdx = 0
+        pcall(function()
+            local ch = LP.Character
+            for _, d in ipairs(Workspace:GetDescendants()) do
+                if #T >= 4000 then break end
+                local okP = false
+                pcall(function()
+                    okP = d:IsA("BasePart") or d:IsA("Decal") or d:IsA("Texture")
+                end)
+                if okP and not hubTextureProtected(d) then
+                    if ch and d:IsDescendantOf(ch) then
+                        if Cfg.WorldTextureMe ~= false then table.insert(T, d) end
+                    elseif Cfg.WorldTextureMap ~= false then
+                        table.insert(T, d)
+                    end
+                end
+            end
+        end)
+    end
+    local idx = getgenv()._HubTexIdx or 0
+    local budget = 0
+    while idx < #T and budget < 120 do
+        idx += 1
+        budget += 1
+        hubTexApplyOne(T[idx])
+    end
+    getgenv()._HubTexIdx = (idx >= #T) and 0 or idx
+end
 function resetWorldTexture() -- restore all textured parts --
+    getgenv()._HubTexList = nil
+    getgenv()._HubTexIdx = 0
+    getgenv()._HubTexRescan = 0
     pcall(function()
         local saved = getgenv()._HubTexSaved
         if type(saved) ~= "table" then return end
@@ -6975,6 +7101,46 @@ function hubPlayEmote(name, speed, loop)
 end
 
 
+function hubEmoteWalkTick() -- walk while emoting: stop facing-lock while moving --
+    if getgenv()._HubEmoteName == nil then return end
+    pcall(function()
+        local char = LP.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        if hum.MoveDirection.Magnitude > 0.1 then
+            if hum.AutoRotate ~= false then hum.AutoRotate = false end
+        elseif hum.AutoRotate ~= true then
+            hum.AutoRotate = true
+        end
+    end)
+end
+function hubEmotePersistTick() -- match-proof: replay whenever the track dies --
+    local want = getgenv()._HubEmoteName
+    if not want then return end
+    local alive = false
+    pcall(function()
+        local char = LP.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not (hum and hum.Health > 0) then alive = true return end
+        local an = hum:FindFirstChildOfClass("Animator")
+        if an then
+            for _, tr in ipairs(an:GetPlayingAnimationTracks()) do
+                if tr.IsPlaying and tr.Priority == Enum.AnimationPriority.Action then
+                    alive = true
+                    break
+                end
+            end
+        end
+        if not alive and getgenv()._HubEmoteRivalsInst then alive = true end
+    end)
+    if not alive and (getgenv()._HubEmoteRetryAt or 0) + 1.0 < tick() then
+        getgenv()._HubEmoteRetryAt = tick()
+        local nm = getgenv()._HubEmoteName
+        getgenv()._HubEmoteName = nil
+        getgenv()._HubEmoteInst = nil
+        hubPlayEmote(nm, Cfg.EmoteSpeed, Cfg.EmoteLoop)
+    end
+end
 function hubEmoteLoopWatch(name)
     getgenv()._HubEmoteLoop = true
     task.spawn(function()
@@ -7126,44 +7292,93 @@ FONT_LEGACY_FALLBACK = {
 _fontFaceCache = {}
 
 
+function hubFontWatch() -- new labels styled on arrival, zero scan cost --
+    if getgenv()._HubFontConn then return end
+    pcall(function()
+        local pg = LP.PlayerGui
+        if not pg then return end
+        getgenv()._HubFontConn = pg.DescendantAdded:Connect(function(d)
+            pcall(function()
+                if not (d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox")) then return end
+                local F = getgenv()._HubFont
+                if F and F.face and d.FontFace.Family ~= F.face.Family then
+                    d.FontFace = F.face
+                end
+                if F and F.col and d.TextColor3 ~= F.col then
+                    d.TextColor3 = F.col
+                end
+            end)
+        end)
+    end)
+end
 function applyFontStyle()
     local wantFont = not (Cfg.FontStyle == nil or Cfg.FontStyle == "" or Cfg.FontStyle == "Default")
     local wantColor = Cfg.FontColorEnabled and true or false
     if not wantFont and not wantColor then return end
-    local fam, face, okE, ef = nil, nil, false, nil
-    if wantFont then
-        fam = FONT_LEGACY_FALLBACK[Cfg.FontStyle] or Cfg.FontStyle
-        face = _fontFaceCache[fam]
-        if not face then
-            local okF, f = pcall(function()
-                return Font.fromName(fam, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+    hubFontWatch()
+    -- fast: cached face + 150 labels/call budget, sticky across rebuilds.
+    -- never reverts unless you pick Default.
+    local F = getgenv()._HubFont
+    if type(F) ~= "table" then F = {} getgenv()._HubFont = F end
+    local fam = wantFont and (FONT_LEGACY_FALLBACK[Cfg.FontStyle] or Cfg.FontStyle) or nil
+    if F.fam ~= fam then
+        F.fam = fam
+        F.face = nil
+        F.idx = 0
+        F.list = nil
+        F.rescan = 0
+        if fam then
+            pcall(function()
+                F.face = Font.fromName(fam, Enum.FontWeight.Regular, Enum.FontStyle.Normal)
             end)
-            if not okF or not f then face = nil else face = f _fontFaceCache[fam] = f end
+            if F.face then _fontFaceCache[fam] = F.face end
         end
-        local _okE, _ef = pcall(function() return Enum.Font[Cfg.FontStyle] end)
-        okE, ef = _okE, _ef
-        if not face and not (okE and ef) then return end -- bad font name, color still runs below --
     end
-    local wantCol = Cfg.FontColorEnabled and Color3.fromRGB(Cfg.FontColorR or 255, Cfg.FontColorG or 255, Cfg.FontColorB or 255) or nil
-    local pg = LP.PlayerGui
-    if not pg then return end
-    for _, d in ipairs(pg:GetDescendants()) do
-        if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
-            if wantFont and okE and ef and d.Font ~= ef then
-                pcall(function() d.Font = ef end)
-            end
-            if wantFont then
-                local same = false
-                pcall(function()
-                    same = (d.FontFace.Family == face.Family)
-                end)
-                if not same then
-                    pcall(function() d.FontFace = face end)
+    if wantFont and not F.face then
+        local ef = nil
+        pcall(function() ef = Enum.Font[Cfg.FontStyle] end)
+        F.enum = ef
+        if not ef then return end
+    end
+    F.col = wantColor and Color3.fromRGB(Cfg.FontColorR or 255, Cfg.FontColorG or 255, Cfg.FontColorB or 255) or nil
+    if (F.rescan or 0) + 10 < tick() or type(F.list) ~= "table" then
+        F.rescan = tick()
+        F.list = {}
+        F.idx = 0
+        pcall(function()
+            local pg = LP.PlayerGui
+            if pg then
+                for _, d in ipairs(pg:GetDescendants()) do
+                    if #F.list >= 1500 then break end
+                    local okT = false
+                    pcall(function()
+                        okT = d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox")
+                    end)
+                    if okT then table.insert(F.list, d) end
                 end
             end
-            if wantCol then pcall(function() if d.TextColor3 ~= wantCol then d.TextColor3 = wantCol end end) end
-        end
+        end)
     end
+    local idx = F.idx or 0
+    local budget = 0
+    while idx < #F.list and budget < 150 do
+        idx += 1
+        budget += 1
+        local d = F.list[idx]
+        pcall(function()
+            if d and d.Parent then
+                if wantFont then
+                    if F.face then
+                        if d.FontFace.Family ~= F.face.Family then d.FontFace = F.face end
+                    elseif F.enum and d.Font ~= F.enum then
+                        d.Font = F.enum
+                    end
+                end
+                if F.col and d.TextColor3 ~= F.col then d.TextColor3 = F.col end
+            end
+        end)
+    end
+    F.idx = (idx >= #F.list) and 0 or idx
 end
 
 
@@ -9222,7 +9437,25 @@ function(dt)
                             if hubFiniteNum(mx) and hubFiniteNum(my)
                                 and math.abs(mx) < 5000 and math.abs(my) < 5000 then
                                 if mx ~= 0 or my ~= 0 then
-                                    pcall(mousemoverel, mx, my)
+                                    if type(mousemoverel) == "function" then
+                                        pcall(mousemoverel, mx, my)
+                                    else
+                                        -- no mousemoverel on this executor: drive
+                                        -- the camera directly so the bot still aims.
+                                        if (getgenv()._HubNoMMRAt or 0) + 10 < tick() then
+                                            getgenv()._HubNoMMRAt = tick()
+                                            pcall(function() Library:Notify("Aimbot: no mousemoverel here, camera drive live", 4) end)
+                                        end
+                                        pcall(function()
+                                            local cp = cam.CFrame.Position
+                                            local want = (tPos - cp).Unit
+                                            local cur = cam.CFrame.LookVector
+                                            local blended = cur + (want - cur) * math.clamp(alpha, 0.01, 0.99)
+                                            if hubFiniteVec(blended) and blended.Magnitude > 0.001 then
+                                                cam.CFrame = CFrame.lookAt(cp, cp + blended)
+                                            end
+                                        end)
+                                    end
                                     fx, fy = fx - mx, fy - my
                                 end
                                 if math.abs(fx) > 1 then fx = (fx > 0) and 1 or -1 end
@@ -9459,6 +9692,11 @@ end
                 applyShaders()
                 hubPerfEnforce()
             end)
+            -- fresh duel map: texture sweep restarts so the new map gets styled
+            getgenv()._HubTexList = nil
+            getgenv()._HubTexIdx = 0
+            getgenv()._HubTexRescan = 0
+            pcall(function() hubTexWatch() end)
             pcall(function()
                 hubRefreshWeapons()
                 hubRefreshShared()
@@ -9535,6 +9773,14 @@ end
     if _hubFrameTick % 60 == 0 and (getgenv()._HubPerfLvl or 0) < 1 then
         applyFontStyle()
     end
+    -- 10a. Texture tick: 120 parts/frame, persistent until YOU reset.
+    pcall(function() hubTexTick() end)
+    -- 10a2. Utility skins re-stamp (~5s, duel-only): placed gadgets rebuild
+    -- visuals through the world path and shed skin; re-fire saved
+    -- skin/wrap/finisher/charm. Never grants weapons.
+    if _hubFrameTick % 300 == 0 then
+        pcall(function() hubUtilReapply() end)
+    end
     -- v18: skin preview follows selection (~1/s)
     if _hubFrameTick % 60 == 0 then
         pcall(function() hubWepPreviewTick() end)
@@ -9544,6 +9790,11 @@ end
     -- 10b. Streak-end watch (~1/s): attribute dip OR death while holding
     if _hubFrameTick % 60 == 0 then
         pcall(function() hubStreakWatchTick() end)
+    end
+    -- 10b2. Emotes: walk assist + persist across match end (~2/s).
+    if _hubFrameTick % 30 == 0 then
+        pcall(function() hubEmoteWalkTick() end)
+        pcall(function() hubEmotePersistTick() end)
     end
 
 
@@ -9696,7 +9947,7 @@ function hubApplyShadeTitle() -- auto graffiti like picture, no file needed: dar
         local win = findHubWindow()
         if not win then return end
         for _, d in ipairs(win:GetDescendants()) do
-            if d:IsA("TextLabel") and (d.Text == "SHADE" or string.find(tostring(d.Text or ""), "Shade External", 1, true) or d.Name == "_HubShadeTitle") then
+            if d:IsA("TextLabel") and (d.Text == "SHADE" or string.find(tostring(d.Text or ""), "SHADE", 1, true) == 1 or string.find(tostring(d.Text or ""), "Shade External", 1, true) or d.Name == "_HubShadeTitle") then
                 d.Name = "_HubShadeTitle"
                 d.Text = "SHADE"
                 d.Font = Enum.Font.GothamBlack
@@ -9815,6 +10066,11 @@ function hubFixSliderScale()
             if type(o) == "table" and o.Type == "Slider" and o.Display then
                 o.MaxSize = maxSize
                 pcall(function() o:Display() end)
+                -- redraw through the official value path too: some forks
+                -- only repaint fill on SetValue, so maxed sliders sat mid-track.
+                pcall(function()
+                    if o.SetValue and o.Value ~= nil then o:SetValue(o.Value) end
+                end)
             end
         end
     end)
@@ -10436,18 +10692,21 @@ function hubSyncAimUI()
         local function setT(flag, val)
             local o = opts[flag]
             if o and o.SetValue and o.Type == "Toggle" then
+                if o.Value == (val and true or false) then return end
                 pcall(function() o:SetValue(val and true or false) end)
             end
         end
         local function setD(flag, val)
             local o = opts[flag]
             if o and o.SetValue and o.Type == "Dropdown" then
+                if o.Value == val then return end
                 pcall(function() o:SetValue(val) end)
             end
         end
         local function setS(flag, val)
             local o = opts[flag]
             if o and o.SetValue and o.Type == "Slider" then
+                if o.Value == val then return end
                 pcall(function() o:SetValue(val) end)
             end
         end
@@ -10482,6 +10741,7 @@ function hubSyncAimUI()
         setT("AimFrameIndependent", Cfg.AimFrameIndependent ~= false)
     end)
     getgenv()._HubSyncBusy = false
+    pcall(function() hubAimRateLabel() end)
 end
 
 
@@ -10988,7 +11248,7 @@ RageGroup:AddToggle("RageWaitImmune", {
 RageGroup:AddDropdown("RagePosMode", {
     Text    = "Position Mode",
     Default = Cfg.RagePosMode or "Off",
-    Values  = { "Off", "Sky", "Behind", "Underground", "Fly" },
+    Values  = { "Off", "Sky", "Behind", "Underground", "Fly", "Side", "Camera" },
     Callback = function(v)
         if (Cfg.RagePosMode or "Off") == "Fly" and v ~= "Fly" then rageFlyRestore() end
         Cfg.RagePosMode = v
@@ -10997,6 +11257,7 @@ RageGroup:AddDropdown("RagePosMode", {
 
 
 RageGroup:AddLabel("Sky: shoot down from above. Behind: back-stab plant.")
+RageGroup:AddLabel("Side: alternating flanks. Camera: fire from view.")
 RageGroup:AddLabel("Underground: up at the feet. Fly: hover + follow.")
 local TrigGroup = Tabs.Aim:AddLeftGroupbox("Triggerbot")
 
@@ -11611,6 +11872,17 @@ AimVisGroup:AddToggle("AimShowFOV", {
     Callback = function(v)
         Cfg.AimShowFOV = v
         if not v then fovCircle.Visible = false end
+    end,
+})
+
+
+AimVisGroup:AddToggle("AimShowSnap", {
+    Text    = "Show Lock Dot",
+    Default = Cfg.AimShowSnap ~= false,
+    Callback = function(v)
+        Cfg.AimShowSnap = v
+        if not v then snapDot.Visible = false end
+        cfgSave()
     end,
 })
 
@@ -12367,6 +12639,7 @@ AimbotMainGroupBox:AddSlider("AimbotSensitivity", {
         Cfg.AimbotSpeed = hubAimSensToSpeed(Cfg.AimbotSensitivity)
         hubAimMirrorLegacy()
         hubSyncAimUI()
+        pcall(function() hubAimRateLabel() end)
     end,
 })
 
@@ -12384,8 +12657,15 @@ AimbotMainGroupBox:AddSlider("AimbotSpeed", {
         Cfg.AimbotSensitivity = hubAimSpeedToSens(Value)
         hubAimMirrorLegacy()
         hubSyncAimUI()
+        pcall(function() hubAimRateLabel() end)
     end,
 })
+
+
+do
+    local _rl = AimbotMainGroupBox:AddLabel("Rate: ...", true)
+    getgenv()._HubRateLbl = _rl
+end
 
 
 AimbotMainGroupBox:AddDropdown("AimbotResponse", {
@@ -13736,11 +14016,11 @@ local WorldBtnGroup = Tabs.World:AddRightGroupbox("Color Correction")
 
 
 WorldBtnGroup:AddInput("WorldSkyboxId", {
-    Text        = "Skybox Asset ID",
+    Text        = "Skybox Asset ID or Link",
     Default     = Cfg.WorldSkyboxId,
-    Placeholder = "e.g. 1084274380",
+    Placeholder = "digits or full rbxassetid:// link",
     Numeric     = false,
-    Callback    = function(v) Cfg.WorldSkyboxId = v end,
+    Callback    = function(v) Cfg.WorldSkyboxId = tostring(v or "") applyWorldSettings() cfgSave() end,
 })
 
 
@@ -13927,6 +14207,9 @@ WorldBtnGroup:AddInput("WorldTextureId", { Text = "Custom Texture ID", Default =
 WorldBtnGroup:AddDropdown("WorldTextureMat", { Text = "Texture Material", Default = Cfg.WorldTextureMat, Values = { "SmoothPlastic", "Neon", "Glass", "ForceField", "Granite", "Marble", "Wood", "Metal", "DiamondPlate" }, Callback = function(v) Cfg.WorldTextureMat = v end, })
 WorldBtnGroup:AddToggle("WorldTextureMap", { Text = "Texture Map", Default = Cfg.WorldTextureMap, Callback = function(v) Cfg.WorldTextureMap = v end, })
 WorldBtnGroup:AddToggle("WorldTextureMe", { Text = "Texture Me Too", Default = Cfg.WorldTextureMe, Callback = function(v) Cfg.WorldTextureMe = v end, })
+WorldBtnGroup:AddSlider("WorldTextureShine", { Text = "Shine (reflectance)", Default = Cfg.WorldTextureShine or 0, Min = 0, Max = 100, Rounding = 0, Callback = function(v) Cfg.WorldTextureShine = v cfgSave() end, })
+WorldBtnGroup:AddToggle("WorldTextureTintOn", { Text = "Tint Parts", Default = Cfg.WorldTextureTintOn, Callback = function(v) Cfg.WorldTextureTintOn = v cfgSave() end, })
+WorldBtnGroup:AddLabel("Tint Color"):AddColorPicker("WorldTextureTint", { Title = "Tint Color", Default = Color3.fromRGB(Cfg.WorldTextureTintR or 255, Cfg.WorldTextureTintG or 255, Cfg.WorldTextureTintB or 255), Callback = function(c) Cfg.WorldTextureTintR = math.floor(c.R * 255) Cfg.WorldTextureTintG = math.floor(c.G * 255) Cfg.WorldTextureTintB = math.floor(c.B * 255) Cfg.WorldTextureTintOn = true cfgSave() end, })
 WorldBtnGroup:AddButton({ Text = "Apply Texture", Func = function() applyWorldTexture() end })
 WorldBtnGroup:AddButton({ Text = "Reset Texture", Func = function() resetWorldTexture() end })
 end)
@@ -14126,19 +14409,10 @@ function hubAllWeapons()
             end
         end
     end)
-    pcall(function()
-        local mods = ReplicatedStorage:FindFirstChild("Modules")
-        local im = mods and mods:FindFirstChild("ItemLibrary")
-        local lib = im and require(im)
-        local items = lib and lib.Items or {}
-        for name in pairs(items) do
-            if type(name) == "string" then push(name) end
-        end
-    end)
-    -- static catalog fills whatever detection missed so the list is never empty
-    for _, slot in ipairs({ "Primary", "Secondary", "Melee", "Utility" }) do
-        for _, known in ipairs(HUB_SLOT_WEAPONS[slot] or {}) do push(known) end
-    end
+    -- ItemLibrary dump removed: it lists game-locked weapons too.
+    -- Only equipped fighter items (duel) + truly-owned data (lobby) show.
+    -- locked weapons are never listed: only equipped + truly-owned show.
+    -- game-locked gear stays uncustomizable in the Weapons tab.
     table.sort(out)
     while #out > 120 do table.remove(out) end
     return out
@@ -15190,10 +15464,128 @@ function hubSearchKind(kind, query, labelKey, plural, dropFlag, cfgKey)
 end
 
 
+-- Utility key: "Jump Pad" == "JumpPad". Placed gadgets and viewmodels
+-- spell names differently; this is the shared matcher for the skins engine.
+function hubUtilKey(name)
+    return string.lower(tostring(name or ""):gsub("%s+", ""))
+end
+function hubEquippedMatch(equipped, wn)
+    if type(equipped) ~= "table" or not wn then return nil end
+    if equipped[wn] then return equipped[wn] end
+    local want = hubUtilKey(wn)
+    for k, v in pairs(equipped) do
+        if hubUtilKey(k) == want then return v end
+    end
+    -- placed gadgets rename themselves ("JumpPad_Deployed", "Pad", ...):
+    -- substring either way still counts as yours.
+    for k, v in pairs(equipped) do
+        local ek = hubUtilKey(k)
+        if ek ~= "" and want ~= "" and (string.find(want, ek, 1, true) or string.find(ek, want, 1, true)) then
+            return v
+        end
+    end
+    return nil
+end
+function hubWeaponOwned(name)
+    if not name or name == "" then return false end
+    local want = string.lower(tostring(name))
+    if hubFindWeapon(name) then return true end
+    local owned = false
+    pcall(function()
+        local ps = LP:FindFirstChildOfClass("PlayerScripts")
+        local ct = ps and ps:FindFirstChild("Controllers")
+        local dc = ct and (ct:FindFirstChild("PlayerDataController") or ct:FindFirstChild("DataController"))
+        local mod = dc and require(dc)
+        if mod and mod.GetUnlockedWeapons then
+            local un = mod:GetUnlockedWeapons()
+            if type(un) == "table" then
+                for n in pairs(un) do
+                    if string.lower(tostring(n)) == want then owned = true break end
+                end
+            end
+        end
+    end)
+    return owned
+end
+-- Utility reapply: placed gadgets (Jump Pad pads, tripmines) build visuals
+-- through the world-model path and shed skin after the first build. Re-fire
+-- your saved skin/wrap/finisher/charm. Never grants weapons. Duel-only, 5s.
+-- Placed pads also re-fire instantly on spawn (see hubUtilPlaceWatch).
+function hubUtilPlaceWatch() -- re-stamp the moment your gadget lands --
+    if getgenv()._HubUtilPlaceConn then return end
+    getgenv()._HubUtilPlaceConn = Workspace.DescendantAdded:Connect(function(d)
+        pcall(function()
+            if not inDuel() then return end
+            local nm = ""
+            pcall(function()
+                if d:IsA("Model") then nm = tostring(d.Name or "") end
+            end)
+            if nm == "" then return end
+            local sk = getgenv()._HubWepSkins
+            if type(sk) ~= "table" then return end
+            local matchW, matchSet = nil, nil
+            for w, set in pairs(sk) do
+                if type(set) ~= "table" then continue end
+                local wk = hubUtilKey(w)
+                local nk = hubUtilKey(nm)
+                if wk ~= "" and nk ~= "" and (wk == nk or string.find(nk, wk, 1, true) or string.find(wk, nk, 1, true)) then
+                    matchW, matchSet = w, set
+                    break
+                end
+            end
+            if not matchW or not hubWeaponOwned(matchW) then return end
+            local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+            local data = remotes and remotes:FindFirstChild("Data")
+            local rem = data and data:FindFirstChild("EquipCosmetic")
+            if not rem then return end
+            local vals = { Skin = matchSet.skin, Wrap = matchSet.wrap, Finisher = matchSet.finisher, Charm = matchSet.charm }
+            for _, typ in ipairs({ "Skin", "Wrap", "Finisher", "Charm" }) do
+                local cname = vals[typ]
+                if type(cname) == "string" and cname ~= "" and cname ~= "..." then
+                    rem:FireServer(matchW, typ, cname, {})
+                end
+            end
+            if (getgenv()._HubUtilNoteAt or 0) + 10 < tick() then
+                getgenv()._HubUtilNoteAt = tick()
+                hubNotify("Utility skin re-stamped: " .. tostring(matchW), 2, "hit")
+            end
+        end)
+    end)
+end
+function hubUtilReapply()
+    if (getgenv()._HubUtilAt or 0) + 5 > tick() then return end
+    getgenv()._HubUtilAt = tick()
+    if not inDuel() then return end
+    local sk = getgenv()._HubWepSkins
+    if type(sk) ~= "table" then return end
+    local utils = {}
+    for _, n in ipairs(HUB_SLOT_WEAPONS.Utility or {}) do utils[hubUtilKey(n)] = n end
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    local data = remotes and remotes:FindFirstChild("Data")
+    local rem = data and data:FindFirstChild("EquipCosmetic")
+    if not rem then return end
+    for w, set in pairs(sk) do
+        if type(set) == "table" and utils[hubUtilKey(w)] and hubWeaponOwned(w) then
+            local vals = { Skin = set.skin, Wrap = set.wrap, Finisher = set.finisher, Charm = set.charm }
+            for _, typ in ipairs({ "Skin", "Wrap", "Finisher", "Charm" }) do
+                local cname = vals[typ]
+                if type(cname) == "string" and cname ~= "" and cname ~= "..." then
+                    pcall(function() rem:FireServer(w, typ, cname, {}) end)
+                end
+            end
+        end
+    end
+end
 function hubWeaponApply()
     local w = tostring(Cfg.WeaponTabWeapon or "")
     if w == "" then
         pcall(function() Library:Notify("Weapons: pick a weapon first", 3) end)
+        return
+    end
+    -- game-locked weapons are never customized: skins/wraps/finishers/charms
+    -- only, and only on weapons you own or hold. Nothing grants weapons.
+    if not hubWeaponOwned(w) then
+        pcall(function() Library:Notify("Weapons: " .. w .. " is locked (own it first)", 3) end)
         return
     end
     local types = { Skin = Cfg.WeaponSkin, Wrap = Cfg.WeaponWrap,
@@ -15238,6 +15630,7 @@ end
 function hubWeaponClear()
     local w = tostring(Cfg.WeaponTabWeapon or "")
     if w == "" then return end
+    if not hubWeaponOwned(w) then return end
     local remotes = ReplicatedStorage:FindFirstChild("Remotes")
     local data = remotes and remotes:FindFirstChild("Data")
     local rem = data and data:FindFirstChild("EquipCosmetic")
@@ -16192,6 +16585,31 @@ SoundGroup:AddInput("HitSoundId", {
 })
 
 
+SoundGroup:AddDropdown("HitSoundSample", {
+    Text    = "Shoot Samples (tap = set + hear)",
+    Default = "Off",
+    Values  = { "Off", "Single Shots", "GunShot", "Pistol Fire", "Rifle Shot", "Shotgun" },
+    Callback = function(v)
+        local ids = {
+            ["Single Shots"] = "9114727096", GunShot = "7405935944",
+            ["Pistol Fire"] = "6569844325", ["Rifle Shot"] = "6862108495",
+            Shotgun = "8287951336",
+        }
+        local id = ids[v]
+        if not id then return end
+        Cfg.HitSoundId = id
+        Cfg.HitSoundFile = ""
+        local o = getgenv().Options and getgenv().Options.HitSoundId
+        if o and o.SetValue then pcall(function() o:SetValue(id) end) end
+        cfgSave()
+        pcall(function()
+            local sid = hubSoundWant(id, "")
+            if sid then playCustomSoundResolved("HubHitSound", sid, Cfg.HitSoundVol) end
+        end)
+    end,
+})
+
+
 SoundGroup:AddInput("HitSoundFile", {
     Text        = "Hit Sound File (beats ID)",
     Default     = Cfg.HitSoundFile,
@@ -16236,6 +16654,31 @@ SoundGroup:AddInput("KillSoundId", {
     Default     = Cfg.KillSoundId,
     Placeholder = "paste asset id",
     Callback    = function(v) Cfg.KillSoundId = tostring(v or "") end,
+})
+
+
+SoundGroup:AddDropdown("KillSoundSample", {
+    Text    = "Kill Samples (tap = set + hear)",
+    Default = "Off",
+    Values  = { "Off", "Boom Headshot", "HitMarker", "Hitmark", "Headshot", "COD Marker" },
+    Callback = function(v)
+        local ids = {
+            ["Boom Headshot"] = "7361085557", HitMarker = "160432334",
+            Hitmark = "9116483270", Headshot = "208341701",
+            ["COD Marker"] = "5952120301",
+        }
+        local id = ids[v]
+        if not id then return end
+        Cfg.KillSoundId = id
+        Cfg.KillSoundFile = ""
+        local o = getgenv().Options and getgenv().Options.KillSoundId
+        if o and o.SetValue then pcall(function() o:SetValue(id) end) end
+        cfgSave()
+        pcall(function()
+            local sid = hubSoundWant(id, "")
+            if sid then playCustomSoundResolved("HubKillSound", sid, Cfg.KillSoundVol) end
+        end)
+    end,
 })
 
 
@@ -17819,6 +18262,12 @@ task.spawn(function()
     ensureDimOverlay(true)
     pcall(function() hubCenterTitle() end)
     pcall(function() hubApplyShadeTitle() end) -- re-assert after overlay --
+    pcall(function()
+        Library:Notify("SHADE v22: desync Side, util skins, locked-gate, no-X panels", 5)
+    end)
+    pcall(function() hubTexWatch() end)
+    pcall(function() hubFontWatch() end)
+    pcall(function() hubUtilPlaceWatch() end)
     watchMainTabs()
     -- heavy boot work is staggered so execute never freezes the game:
     -- menu is already up, these fill in behind it one breath at a time.
@@ -18387,9 +18836,8 @@ function hubBuildMouseGui()
         pos = UDim2.fromOffset(Cfg.MouX, Cfg.MouY)
     end
     local main = hubOverlayFrame(sg, "Box", UDim2.new(0, 224, 0, 72), pos)
-    local title = hubOverlayTitle(main, "Mouse", function()
-        hubOverlayClose("ShowMouseGui")
-    end)
+    -- no X, no minimize: Settings toggle only.
+    local title = hubOverlayTitle(main, "Mouse", nil)
     local names = { "LMB", "RMB", "MMB" }
     local codes = { 0, 1, 2 }
     for c = 1, 3 do
@@ -18491,9 +18939,8 @@ function hubBuildInputGui()
         pos = UDim2.fromOffset(Cfg.InpX, Cfg.InpY)
     end
     local main = hubOverlayFrame(sg, "Box", UDim2.new(0, 520, 0, 300), pos)
-    local title = hubOverlayTitle(main, "Input", function()
-        hubOverlayClose("ShowInputGui")
-    end)
+    -- no X, no minimize: Settings toggle only.
+    local title = hubOverlayTitle(main, "Input", nil)
     local body = Instance.new("Frame")
     body.Name = "Body"
     body.BackgroundTransparency = 1
@@ -18798,7 +19245,7 @@ pcall(RunService.UnbindFromRenderStep, RunService, "RIVALS_HUB_MAIN_V3")
 end
 
 
-print("[Shade] Loaded. Toggle: " .. Cfg.SettingsHubKey)
+print("[Shade v22] Loaded. Toggle: " .. Cfg.SettingsHubKey)
 
 
 -- ?"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"? ?42b  FINISHER CONTROL ?"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"??"?
@@ -19385,6 +19832,14 @@ task.spawn(function()
 		if viewingOtherCache ~= lastVal then
 			print("[merged v4.2] guard -> " .. tostring(viewingOtherCache) .. " (" .. tostring(guardReason) .. ")")
 			lastVal = viewingOtherCache
+			-- push inventory now: others' profiles render vanilla while open,
+			-- your fakes return the moment it closes. Local-only, always.
+			pcall(function() scheduleRep() end)
+			-- profile UI rebuilds async seconds after opening: re-push vanilla
+			-- twice so a late rebuild can never paint your fakes on them.
+			-- release path re-pushes immediately so YOUR view is fakes again.
+			task.delay(1, function() pcall(function() scheduleRep() end) end)
+			task.delay(3, function() pcall(function() if viewingOtherCache then scheduleRep() end end) end)
 		end
 	end
 end)
@@ -19488,7 +19943,8 @@ task.spawn(function()
 				if wp == LocalPlayer then constructingWeapon = self.Name else constructingWeapon = nil end
 				-- self duel: full inject. inspect preview (wp==nil) only when NOT viewing other.
 				local allow = (wp == LocalPlayer) or (wp == nil and not IsViewingOtherProfile())
-				if allow and equipped[self.Name] and equipped[self.Name].Skin and ref then
+				local eqSelf = hubEquippedMatch(equipped, self.Name)
+				if allow and eqSelf and eqSelf.Skin and ref then
 					pcall(function()
 						local dk, sk, nk = nil, nil, nil
 						local okE = pcall(function()
@@ -19501,7 +19957,7 @@ task.spawn(function()
 							sk = ReplicatedClass:ToEnum("Skin")
 							nk = ReplicatedClass:ToEnum("Name")
 						end
-						local skin = equipped[self.Name].Skin
+						local skin = eqSelf.Skin
 						if dk and sk and ref[dk] then
 							ref[dk][sk] = skin
 							if nk then ref[dk][nk] = skin.Name end
@@ -19530,9 +19986,10 @@ task.spawn(function()
 				local wn = ci and ci.Name
 				local cf = ci and ci.ClientFighter
 				local wp = cf and cf.Player
-				if wn and equipped[wn] and equipped[wn].Wrap then
-					if wp == LocalPlayer then return equipped[wn].Wrap end
-					if wp == nil and not IsViewingOtherProfile() then return equipped[wn].Wrap end
+				local eqW = hubEquippedMatch(equipped, wn)
+			if wn and eqW and eqW.Wrap then
+					if wp == LocalPlayer then return eqW.Wrap end
+					if wp == nil and not IsViewingOtherProfile() then return eqW.Wrap end
 				end
 				return og(self)
 			end
@@ -19544,9 +20001,10 @@ task.spawn(function()
 				local wn = ci and ci.Name
 				local cf = ci and ci.ClientFighter
 				local wp = cf and cf.Player
-				if wn and equipped[wn] and equipped[wn].Charm then
-					if wp == LocalPlayer then return equipped[wn].Charm end
-					if wp == nil and not IsViewingOtherProfile() then return equipped[wn].Charm end
+				local eqC = hubEquippedMatch(equipped, wn)
+			if wn and eqC and eqC.Charm then
+					if wp == LocalPlayer then return eqC.Charm end
+					if wp == nil and not IsViewingOtherProfile() then return eqC.Charm end
 				end
 				return ogc(self)
 			end
@@ -19562,17 +20020,18 @@ task.spawn(function()
 			local wp = cf and cf.Player
 			local wn = constructingWeapon or cItem.Name
 			local allow = (wp == LocalPlayer) or (wp == nil and not IsViewingOtherProfile())
-			if allow and wn and equipped[wn] and enums and repData then
+			local eqN = hubEquippedMatch(equipped, wn)
+		if allow and wn and eqN and enums and repData then
 				pcall(function()
 					repData[enums.D] = repData[enums.D] or {}
-					local e = equipped[wn]
+					local e = eqN
 					if e.Skin then repData[enums.D][enums.S] = e.Skin end
 					if e.Wrap then repData[enums.D][enums.W] = e.Wrap end
 					if e.Charm then repData[enums.D][enums.C] = e.Charm end
 				end)
 			end
 			local r = ogNew(repData, cItem)
-			if r and allow and wn and equipped[wn] and equipped[wn].Wrap and r._UpdateWrap then
+			if r and allow and wn and eqN and eqN.Wrap and r._UpdateWrap then
 				task.spawn(function()
 					pcall(function() r:_UpdateWrap() end)
 					task.wait(0.1)
