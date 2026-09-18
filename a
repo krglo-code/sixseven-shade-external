@@ -1900,15 +1900,70 @@ local function fetchUrl(u)
 end
 
 
-local function tryUrls(urls)
+local LIB_PIN = "3b0bcba89893baa65d36b12b33e70e93ebc8b122"
+local libCache = getgenv()._HubLibCache
+if type(libCache) ~= "table" then libCache = {} getgenv()._HubLibCache = libCache end
+local CACHE_FILES = {
+    Lib   = "Shade External/libcache/source.lua",
+    Save  = "Shade External/libcache/savemanager.lua",
+    Theme = "Shade External/libcache/thememanager.lua",
+}
+local function cacheValid()
+    local ok, pin = pcall(function()
+        if type(isfile) == "function" and isfile("Shade External/libcache/pin.txt") then
+            return readfile("Shade External/libcache/pin.txt")
+        end
+        return nil
+    end)
+    return ok and pin == LIB_PIN
+end
+local function cacheRead(kind)
+    -- session first: re-execute inside one session never touches network.
+    -- NOTE: source only, never the compiled module: re-running the source
+    -- builds a fresh ScreenGui, reusing a module would point at dead UI.
+    local s = libCache[kind]
+    if type(s) == "string" and #s > 1000 then return s end
+    if not cacheValid() then return nil end
+    local f = CACHE_FILES[kind]
+    local ok, has = pcall(function() return type(isfile) == "function" and isfile(f) end)
+    if ok and has then
+        local okR, data = pcall(readfile, f)
+        if okR and type(data) == "string" and #data > 1000 then
+            libCache[kind] = data
+            return data
+        end
+    end
+    return nil
+end
+local function cacheWrite(kind, data)
+    libCache[kind] = data
+    pcall(function()
+        if type(writefile) ~= "function" then return end
+        if type(makefolder) == "function" then makefolder("Shade External/libcache") end
+        writefile(CACHE_FILES[kind], data)
+        writefile("Shade External/libcache/pin.txt", LIB_PIN)
+    end)
+end
+local function tryUrls(urls, kind)
     local lastErr = nil
+    local cached = cacheRead(kind)
+    if cached then
+        local fn, lerr = loadstring(cached)
+        if fn then
+            local rok, mod = pcall(fn)
+            if rok and mod then return mod, "cache" end
+            lastErr = mod
+        else
+            lastErr = lerr
+        end
+    end
     for _, u in ipairs(urls) do
         local res = fetchUrl(u)
         if type(res) == "string" and #res > 1000 then
             local fn, lerr = loadstring(res)
             if fn then
                 local rok, mod = pcall(fn)
-                if rok and mod then return mod, u end
+                if rok and mod then cacheWrite(kind, res) return mod, u end
                 lastErr = mod
             else
                 lastErr = lerr
@@ -1923,9 +1978,9 @@ end
 
 do
     local libErr, saveErr, themeErr
-    Library, libErr       = tryUrls(LIB_URLS)
-    SaveManager, saveErr  = tryUrls(ADDON_URLS.Save)
-    ThemeManager, themeErr = tryUrls(ADDON_URLS.Theme)
+    Library, libErr       = tryUrls(LIB_URLS, "Lib")
+    SaveManager, saveErr  = tryUrls(ADDON_URLS.Save, "Save")
+    ThemeManager, themeErr = tryUrls(ADDON_URLS.Theme, "Theme")
     local err = libErr or saveErr or themeErr
     if not Library then
         err = "Library: " .. tostring(err)
@@ -14703,9 +14758,17 @@ end
 function applyHubTheme(name)
     local t = HUB_THEMES[name] or HUB_THEMES.Default
     pcall(function()
-        Library.AccentColor = Color3.fromRGB(t.acc[1], t.acc[2], t.acc[3])
-        Library.MainColor = Color3.fromRGB(t.main[1], t.main[2], t.main[3])
-        Library.BackgroundColor = Color3.fromRGB(t.back[1], t.back[2], t.back[3])
+        local acc = Color3.fromRGB(t.acc[1], t.acc[2], t.acc[3])
+        local main = Color3.fromRGB(t.main[1], t.main[2], t.main[3])
+        local back = Color3.fromRGB(t.back[1], t.back[2], t.back[3])
+        -- fast path: fresh boot already matches Default, skip ~1000 repaints.
+        if Library.AccentColor == acc and Library.MainColor == main
+            and Library.BackgroundColor == back then
+            return
+        end
+        Library.AccentColor = acc
+        Library.MainColor = main
+        Library.BackgroundColor = back
         Library.AccentColorDark = Library:GetDarkerColor(Library.AccentColor)
         Library:UpdateColorsUsingRegistry()
     end)
@@ -14875,7 +14938,7 @@ end)
 showMainPage("Rage", "Left")
 showMainPage("Aimbot", "Right")
 pcall(function() paintThemeButtons() end)
-pcall(function() autoMainChevrons() end)
+task.delay(8, function() pcall(function() autoMainChevrons() end) end)
 pcall(function() hubResizeAimTabs() end)
 -- last: skin the chevron More/Less buttons created just above
 pcall(function() paintThemeButtons() end)
@@ -19641,8 +19704,7 @@ task.spawn(function()
     task.wait(0.12)
     pcall(function() hubApplyShadeTitle() end) -- picture SHADE title on boot, baked in --
     pcall(function() hubGhostCorners() end) -- v14: corner ghosts, both ends --
-    task.wait(0.12)
-    pcall(function() hubTabOrderInit() end) -- v14: restore + hook tab drag --
+    task.delay(8, function() pcall(function() hubTabOrderInit() end) end) -- v14: restore + hook tab drag (late, cosmetic) --
     pcall(function() applyHubTheme(Cfg.HubTheme or "Default") end)
     task.wait(0.12)
     pcall(function() hubRepairPills() end)
