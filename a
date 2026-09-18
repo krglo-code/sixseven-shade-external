@@ -1299,9 +1299,6 @@ local DEFAULT_CFG = {
     RageAnywhere      = false,   -- v21: fire ragebot outside of duels (lobby/FFA/practice) --
     RageAlwaysBackstab = true,  -- behind-the-back plant, no knife needed --
     RageMeleeRange    = 14,     -- reach gate for behind/underground plants --
-    RageExtendMelee   = true,   -- on = slider reach, off = fixed 14 --
-    RageFuseOverride  = false, -- rewrite grenade fuse fields on fire --
-    RageFuseTime      = 0.5,   -- fuse seconds written when override is on --
     GhostCry          = true,  -- corner ghosts drip mini ghosts --
     -- -- Aim & Fire (last screenshot)
     AimSpeedOverride  = false,
@@ -4403,7 +4400,6 @@ end
 
 
 local function rageReach()
-    if Cfg.RageExtendMelee then return Cfg.RageMeleeRange or 14 end
     return 14
 end
 
@@ -4581,36 +4577,6 @@ local function rageDesyncPlant(targetPlayer, targetRoot, targetHead)
     myRoot.CFrame = desyncCF
     rageGhostRestore(myRoot, snapCF, snapVel, snapRot)
     return desyncCF
-end
-
-
--- Grenade fuse override: best-effort write of fuse-ish numeric fields on
--- grenade-family items at fire time. Client-side, guarded, off by default.
-local function rageFusePoke(item)
-    if not Cfg.RageFuseOverride then return end
-    if type(item) ~= "table" or item._destroyed then return end
-    local nm = ""
-    pcall(function() nm = string.lower(tostring(item.Name or "")) end)
-    if not (string.find(nm, "grenade", 1, true) or string.find(nm, "molotov", 1, true)
-        or string.find(nm, "flash", 1, true) or string.find(nm, "smoke", 1, true)
-        or string.find(nm, "satchel", 1, true)) then return end
-    local want = tonumber(Cfg.RageFuseTime) or 0.5
-    pcall(function()
-        for k, v in pairs(item) do
-            if type(v) == "number" then
-                local kl = string.lower(tostring(k))
-                if string.find(kl, "fuse", 1, true) then item[k] = want end
-            end
-        end
-        if item.Info and type(item.Info) == "table" then
-            for k, v in pairs(item.Info) do
-                if type(v) == "number" then
-                    local kl = string.lower(tostring(k))
-                    if string.find(kl, "fuse", 1, true) then item.Info[k] = want end
-                end
-            end
-        end
-    end)
 end
 
 
@@ -12502,12 +12468,6 @@ RageGroup:AddToggle("RageTeamCheck", {
 })
 
 
-RageGroup:AddToggle("RageNoCooldown", {
-    Text    = "No Cooldown (all weapons + abilities)",
-    Default = Cfg.RageNoCooldown,
-    Callback = function(v) Cfg.RageNoCooldown = v end,
-})
-
 
 RageGroup:AddToggle("RageAutoSwap", {
     Text    = "Auto Swap on Empty",
@@ -12516,18 +12476,6 @@ RageGroup:AddToggle("RageAutoSwap", {
 })
 
 
-RageGroup:AddToggle("HitNotify", {
-    Text    = "Hit Notification",
-    Default = Cfg.HitNotify,
-    Callback = function(v) Cfg.HitNotify = v end,
-})
-
-
-RageGroup:AddToggle("HitDamage", {
-    Text    = "Damage Numbers",
-    Default = Cfg.HitDamage,
-    Callback = function(v) Cfg.HitDamage = v end,
-})
 
 
 RageGroup:AddDropdown("RageFireOrigin", {
@@ -12562,14 +12510,6 @@ RageGroup:AddLabel("Underground: up at the feet. Fly: hover + follow.")
 RageGroup:AddLabel("Mixture: Sky + Underground + Fly cycling every 3s.")
 
 
-RageGroup:AddToggle("RageOriginHold", {
-    Text    = "Character Origin (root at spawn)",
-    Default = Cfg.CharOriginCamera,
-    Tooltip = "Real hitbox locked at origin (spawn). Visual/camera free. Enemies see you rooted.",
-    Callback = function(v)
-        hubOriginHold(v)
-    end,
-})
 local TrigGroup = Tabs.Aim:AddLeftGroupbox("Triggerbot")
 
 
@@ -14219,94 +14159,10 @@ RageFireGroup:AddToggle("RageSwapMelee", {
 
 
 
-local RageFbGroup = Tabs.Aim:AddLeftGroupbox("Feedback")
-
-
-RageFbGroup:AddToggle("RageKillNotify", {
-    Text    = "Kill Notify",
-    Default = Cfg.RageKillNotify,
-    Callback = function(v) Cfg.RageKillNotify = v end,
-})
-
-
-RageFbGroup:AddToggle("RageTargetLabel", {
-    Text    = "Target Label",
-    Default = Cfg.RageTargetLabel,
-    Callback = function(v) Cfg.RageTargetLabel = v end,
-})
-
-
-RageFbGroup:AddToggle("RageMissLog", {
-    Text    = "Miss Log",
-    Default = Cfg.RageMissLog,
-    Callback = function(v) Cfg.RageMissLog = v end,
-})
-
-
-RageFbGroup:AddToggle("RageFireLog", {
-    Text    = "Fire Log",
-    Default = Cfg.RageFireLog,
-    Callback = function(v) Cfg.RageFireLog = v end,
-})
-
-
-local RageStatGroup = Tabs.Aim:AddLeftGroupbox("Session Stats")
-
-
-RageStatGroup:AddLabel("Live accuracy tracker")
-RageStatGroup:AddButton({
-    Text = "Show Session Stats",
-    Func = function()
-    pcall(function() Library:Notify(rageSessionText(), 5) end)
-end})
-
-
-RageStatGroup:AddButton({
-    Text = "Reset Session Stats",
-    Func = function()
-    getgenv()._HubRageS = { kills = 0, hits = 0, misses = 0, dmg = 0, t0 = tick() }
-end})
-
-
-local RageSafeGroup = Tabs.Aim:AddLeftGroupbox("Ragebot Safety")
-
-
-RageSafeGroup:AddToggle("RageSpecWarn", {
-    Text    = "Spectator Warning",
-    Default = Cfg.RageSpecWarn,
-    Callback = function(v) Cfg.RageSpecWarn = v end,
-})
-
-
-RageSafeGroup:AddToggle("RageSpecPause", {
-    Text    = "Pause While Spectated",
-    Default = Cfg.RageSpecPause,
-    Callback = function(v) Cfg.RageSpecPause = v end,
-})
-
-
-RageSafeGroup:AddToggle("RageStaffWatch", {
-    Text    = "Staff Watch (dev/employee)",
-    Default = Cfg.RageStaffWatch,
-    Callback = function(v) Cfg.RageStaffWatch = v end,
-})
-
-
-RageSafeGroup:AddToggle("RageStaffPause", {
-    Text    = "Pause on Staff",
-    Default = Cfg.RageStaffPause,
-    Callback = function(v) Cfg.RageStaffPause = v end,
-})
-
-
-RageSafeGroup:AddLabel("Dead duelists may be watching.")
-RageSafeGroup:AddLabel("Pause beats a clip.")
-
-
 -- Segmented switchers on BOTH sides (left: rage/trigger, right: aim/silent).
 -- Rage sets join the registry here; buttons live in the top Pages boxes.
 local _mg = getgenv()._HubMainGroups or {}
-_mg.Rage = { RageGroup, RageTargGroup, RageFireGroup, RageBtnGroup, ProtectGroup, RageFbGroup, RageStatGroup, RageSafeGroup }
+_mg.Rage = { RageGroup, RageTargGroup, RageFireGroup, RageBtnGroup, ProtectGroup }
 getgenv()._HubMainGroups = _mg
 
 
@@ -17436,41 +17292,11 @@ MeleeGroup:AddToggle("AlwaysBackstab", {
 })
 
 
-MeleeGroup:AddToggle("ExtendMeleeRange", {
-    Text    = "Extend Melee Range",
-    Default = Cfg.RageExtendMelee ~= false,
-    Callback = function(v) Cfg.RageExtendMelee = v cfgSave() end,
-})
-
-
-MeleeGroup:AddSlider("MeleeRange", {
-    Text    = "Range",
-    Default = Cfg.RageMeleeRange or 14,
-    Min     = 4,
-    Max     = 40,
-    Rounding = 0,
-    Callback = function(v) Cfg.RageMeleeRange = v cfgSave() end,
-})
 
 
 local GrenadeGroup = Tabs.Weapons:AddRightGroupbox("Grenades")
 
 
-GrenadeGroup:AddToggle("FuseOverride", {
-    Text    = "Fuse Override",
-    Default = Cfg.RageFuseOverride,
-    Callback = function(v) Cfg.RageFuseOverride = v cfgSave() end,
-})
-
-
-GrenadeGroup:AddSlider("FuseTime", {
-    Text    = "Fuse Time (s)",
-    Default = math.floor((Cfg.RageFuseTime or 0.5) * 10),
-    Min     = 1,
-    Max     = 30,
-    Rounding = 0,
-    Callback = function(v) Cfg.RageFuseTime = v / 10 cfgSave() end,
-})
 
 
 GrenadeGroup:AddLabel("Writes fuse on grenade-family")
@@ -21133,195 +20959,147 @@ function fusDesyncStop()
     fusDesync.server = nil fusDesync.client = nil
 end
 
--- ---------- 2. MIXED RAGEBOT (UE void/priority/ammo + Elisium desync/predict) --
--- Wraps base rageFireStep: when RageMixed on, use fused path; else base.
-if not _baseRageFireStep then _baseRageFireStep = rageFireStep end
+-- ---------- 2. PURE RAGEBOT (UE x Elisium only. Position mode kept intact) ----
+-- UE : priority targeting, void spam, ammo reload, swap-when-empty,
+--      prefer-projectile, revolver handler, melee heavy timing, anti-katana.
+-- Elisium : desync orbit, adaptive prediction, shoot attempts.
+-- Hub extras REMOVED from this path: cooldown patching, fuse override,
+-- hit/kill sounds + popups, target labels, miss/fire logging, hold notes,
+-- spectator/staff safety, session stats, origin hold.
 function rageFireStep(cam)
-    if not Cfg.RageMixed then return _baseRageFireStep(cam) end
     if not Cfg.RageEnabled then rageFlyRestore() fusDesyncStop() return end
-    if hubRageSafetyHold() then return end
-    if not inDuel() and not Cfg.RageAnywhere then _lastRageSlotApplied = nil rageFlyRestore() fusDesyncStop() return end
-    local fc = getFC() if not (fc and fc.LocalFighter) then return end
+    if not inDuel() and not Cfg.RageAnywhere then
+        _lastRageSlotApplied = nil
+        rageFlyRestore()
+        fusDesyncStop()
+        return
+    end
+    local fc = getFC()
+    if not (fc and fc.LocalFighter) then return end
     local lf = fc.LocalFighter
     local nowTick = tick()
-    if cooldownPatchActive() then patchLF(lf, nowTick) end
+    -- UE weapon setting: equip on slot change only
     local slotNum = WEAPON_SLOTS[Cfg.RageWeaponSlot] or 3
-    if slotNum ~= _lastRageSlotApplied then pcall(function() lf:EquipItem(slotNum) end) _lastRageSlotApplied = slotNum end
-    if nowTick - _lastDeflSweep > 0.25 then _lastDeflSweep = nowTick updateDeflectionMap() end
-
-    -- fused priority target (UE weighting + hub gates)
-    local targetPlayer, targetChar = fusPriorityTarget(cam)
-    local _, br, bh = getRageTarget(cam)
-    if not targetPlayer and br and bh then
-        pcall(function()
-            for _, p in ipairs(Players:GetPlayers()) do if p.Character and bh:IsDescendantOf(p.Character) then targetPlayer = p targetChar = p.Character break end end
-        end)
+    if slotNum ~= _lastRageSlotApplied then
+        pcall(function() lf:EquipItem(slotNum) end)
+        _lastRageSlotApplied = slotNum
     end
+    -- shared deflect map (UE anti-katana source)
+    if nowTick - _lastDeflSweep > 0.25 then
+        _lastDeflSweep = nowTick
+        updateDeflectionMap()
+    end
+    -- UE priority target
+    local targetPlayer, targetChar = fusPriorityTarget(cam)
     if not (targetPlayer and targetChar) then
         if (Cfg.RagePosMode or "Off") == "Fly" then rageFlyRestore() end
-        fusDesyncStop() return
+        fusDesyncStop()
+        return
     end
     local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
     local targetHead = targetChar:FindFirstChild("HitboxHead") or targetChar:FindFirstChild("Head")
     if not (targetRoot and targetHead) then return end
-    if isDeflecting(targetPlayer) then rageLogMiss("deflect") return end
+    -- UE anti-katana: silent hold while deflecting
+    if isDeflecting(targetPlayer) then return end
+    -- Elisium desync orbit
     if Cfg.RageDesyncOrbit then fusDesyncStart(targetPlayer) else fusDesyncStop() end
+    -- Elisium prediction state
     fusPredUpdate(targetPlayer)
+    -- UE void spam (rate + self-guard live in rageVoidSpam)
     rageVoidSpam(targetRoot)
     -- fire gate
     local rate = math.max(0, Cfg.RageFireRate or 0.0005)
-    -- UE shoot attempts: extra projectiles per tick
-    local attempts = math.clamp(math.floor(Cfg.RageShootAttempts or 1), 1, 5)
     if nowTick - _lastRageFire < rate then return end
     _lastRageFire = nowTick
-    local util = getUtil() local enumLib = getEnumLib()
+    local util = getUtil()
+    local enumLib = getEnumLib()
     if not (util and enumLib) then return end
     local item = lf.EquippedItem
-    if not item then rageLogMiss("noItem") return end
-    pcall(function() rageFusePoke(item) end)
-    -- ammo / reload / swap (UE logic + hub swap)
-    do
-        local ammoNow = item.Data and item.Data.Ammo
-        local reserve = item.Data and (item.Data.AmmoReserve or item.Data.Reserve)
-        local wtype = item.Info and item.Info.Type
-        if wtype == "Gun" and type(ammoNow) == "number" and ammoNow <= 0 then
-            if type(reserve) == "number" and reserve > 0 and Cfg.RageReloadAuto then
-                if nowTick > fusReloadCD then
-                    fusReloadCD = nowTick + 0.4
-                    pcall(function() hubTryReload(item, true) end)
-                end
-                return
-            end
-            if Cfg.RageSwapEmpty then
-                -- fall through to hub swap block by faking debounce
-                local SW = getgenv()._HubSwap if type(SW) ~= "table" then SW = {} getgenv()._HubSwap = SW end
-            end
+    if not item then return end
+    -- UE ammo: dry mag + reserve -> reload through the game's own entrypoint
+    local ammoNow = item.Data and item.Data.Ammo
+    local reserve = item.Data and (item.Data.AmmoReserve or item.Data.Reserve)
+    if (item.Info and item.Info.Type) == "Gun" and type(ammoNow) == "number" and ammoNow <= 0 then
+        if type(reserve) == "number" and reserve > 0 then
+            pcall(function() hubTryReload(item, true) end)
+            return
         end
-        -- hub autoswap block (reuse): run inline minimal
-        if Cfg.RageAutoSwap and type(ammoNow) == "number" then
-            local SW = getgenv()._HubSwap if type(SW) ~= "table" then SW = {} getgenv()._HubSwap = SW end
-            local oid = nil pcall(function() oid = item:Get("ObjectID") end)
-            local key = tostring(oid or item.Name or "cur")
-            local reloadingNow = (item._reload_cooldown ~= nil and item._reload_cooldown > nowTick) or item._reloading == true
-            if ammoNow <= 0 and not reloadingNow then SW[key] = (SW[key] or 0) + 1 else SW[key] = 0 end
-            local need = math.max(1, Cfg.RageSwapDebounce or 12)
-            if (SW[key] or 0) >= need then
-                SW[key] = 0
-                local bestGun, bestMelee = nil, nil
-                if type(lf.Items) == "table" then
-                    for slot = 1, 4 do
-                        local it = lf.Items[slot]
-                        if it and it ~= item then
-                            local a = it.Data and it.Data.Ammo
-                            if type(a) == "number" and a > 0 then if not bestGun then bestGun = { slot = slot, it = it } end
-                            elseif a == nil and not bestMelee then bestMelee = { slot = slot, it = it } end
-                        end
+        -- UE swap weapons when empty: first loaded slot that is not current
+        if Cfg.RageAutoSwap then
+            local pick = nil
+            if type(lf.Items) == "table" then
+                for slot = 1, 4 do
+                    local it = lf.Items[slot]
+                    if it and it ~= item then
+                        local a = it.Data and it.Data.Ammo
+                        if type(a) == "number" and a > 0 then pick = slot break end
                     end
                 end
-                local pick = bestGun or (Cfg.RageSwapMelee and bestMelee) or nil
-                if pick then
-                    pcall(function() lf:EquipItem(pick.slot) end) _lastRageSlotApplied = pick.slot
-                    pcall(function() hubTryReload(item) end)
-                    task.delay(0.35, function() pcall(function() local cur = lf.EquippedItem if cur then hubTryReload(cur) end end) end)
-                    item = lf.EquippedItem or pick.it
-                else
-                    if Cfg.RageSwapReload then pcall(function() hubTryReload(item) end) end
-                    return
-                end
-            elseif ammoNow <= 0 then return end
-        end
-        -- UE prefer projectile: melee + gun mode -> swap to configured slot
-        if Cfg.RagePreferProjectile and (Cfg.RageMode or "gun") == "gun" then
-            local wt = item.Info and item.Info.Type
-            if wt == "Melee" then pcall(function() lf:EquipItem(WEAPON_SLOTS[Cfg.RageWeaponSlot] or 1) end) return end
-        end
-        -- revolver fast path (UE proto 701)
-        if item.Name == "Revolver" then
-            local hb = targetHead
-            local aimPos = fusPredAim(hb.Position + fusRandomUnit()*0.5, (cam and cam.CFrame.Position or Vector3.new(0,60,0)))
-            for _ = 1, attempts do
-                local desyncCF = (Cfg.RageFireOrigin ~= "Camera") and rageDesyncPlant(targetPlayer, targetRoot, targetHead) or nil
-                local originPos = desyncCF and desyncCF.Position or rageMyOrigin(cam)
-                local aimCF = CFrame.lookAt(originPos, aimPos)
-                local camdata = {} camdata[utf8.char(1)] = {
-                    [utf8.char(0)] = util:EncodeCFrame(aimCF),
-                    [utf8.char(1)] = util:EncodeCFrame(targetHead.CFrame),
-                    [utf8.char(2)] = targetHead,
-                    [utf8.char(3)] = util:EncodeCFrame(targetHead.CFrame:ToObjectSpace(CFrame.new(aimPos))),
-                }
-                pcall(function()
-                    ReplicatedStorage.Remotes.Replication.Fighter.UseItem:FireServer(item:Get("ObjectID"), enumLib:ToEnum("StartShooting"), camdata, nil)
-                end)
-                pcall(function() hubTracerBeam(originPos, aimPos) end)
             end
-            fusAttackNum += 1
+            if pick then
+                pcall(function() lf:EquipItem(pick) end)
+                _lastRageSlotApplied = pick
+                item = lf.EquippedItem or item
+                local a2 = item.Data and item.Data.Ammo
+                if type(a2) == "number" and a2 <= 0 then return end
+            else
+                return
+            end
+        else
             return
         end
     end
-    if not item then return end
-    -- melee heavy path (UE voidSpamMelee merged w/ hub plant)
-    local wtype = item.Info and item.Info.Type
-    if wtype == "Melee" then
-        local now = tick()
-        local cd = item.Info and item.Info.HeavyAttackCooldown or 0.2
-        if now - fusLastAttack < cd then return end
-        fusLastAttack = now fusHeavyNum += 1
-    else fusAttackNum += 1 end
+    -- UE prefer projectile weapon: melee out while mode is gun -> swap back
+    if Cfg.RagePreferProjectile and (Cfg.RageMode or "gun") == "gun"
+        and item.Info and item.Info.Type == "Melee" then
+        pcall(function() lf:EquipItem(WEAPON_SLOTS[Cfg.RageWeaponSlot] or 1) end)
+        return
+    end
+    -- UE melee heavy timing
+    if item.Info and item.Info.Type == "Melee" then
+        local cd = item.Info.HeavyAttackCooldown or 0.2
+        if nowTick - fusLastAttack < cd then return end
+        fusLastAttack = nowTick
+    end
+    -- Position mode plant (KEPT as-is: Off / Sky / Behind / Underground /
+    -- Fly / Mixture / Side / Camera). Fire Origin Camera skips the plant.
     local useCamOrigin = (Cfg.RageFireOrigin or "Head") == "Camera"
     local desyncCF = (not useCamOrigin) and rageDesyncPlant(targetPlayer, targetRoot, targetHead) or nil
     if desyncCF then
-        local realPos = rageMyOrigin(cam)
-        getgenv()._HubDesyncOff = desyncCF.Position - realPos
-    else getgenv()._HubDesyncOff = nil end
-    local originPos = desyncCF and desyncCF.Position or rageMyOrigin(cam)
-    if fusDesync.active and fusDesync.server and typeof(fusDesync.server) == "Vector3" and fusDesync.server.Y < 1000 then
-        -- server-side ghost is at enemy; fire from fused predicted head
+        getgenv()._HubDesyncOff = desyncCF.Position - rageMyOrigin(cam)
+    else
+        getgenv()._HubDesyncOff = nil
     end
+    local originPos = desyncCF and desyncCF.Position or rageMyOrigin(cam)
+    -- Elisium predicted head
     local baseAim = fusPredAim(targetHead.Position, originPos)
+    -- UE shoot attempts
+    local attempts = math.clamp(math.floor(Cfg.RageShootAttempts or 1), 1, 5)
     for _ = 1, attempts do
-        local jitter = Vector3.new((math.random()-0.5)*0.12,(math.random()-0.5)*0.12,(math.random()-0.5)*0.12)
+        local jitter = Vector3.new(
+            (math.random() - 0.5) * 0.12,
+            (math.random() - 0.5) * 0.12,
+            (math.random() - 0.5) * 0.12
+        )
         local aimedPos = baseAim + jitter
         local aimCF = CFrame.lookAt(originPos, aimedPos)
-        local camdata = {} camdata[utf8.char(1)] = {
+        local camdata = {}
+        camdata[utf8.char(1)] = {
             [utf8.char(0)] = util:EncodeCFrame(aimCF),
             [utf8.char(1)] = util:EncodeCFrame(targetHead.CFrame),
             [utf8.char(2)] = targetHead,
             [utf8.char(3)] = util:EncodeCFrame(targetHead.CFrame:ToObjectSpace(CFrame.new(aimedPos))),
         }
         pcall(function()
-            ReplicatedStorage.Remotes.Replication.Fighter.UseItem:FireServer(item:Get("ObjectID"), enumLib:ToEnum("StartShooting"), camdata, nil)
+            ReplicatedStorage.Remotes.Replication.Fighter.UseItem:FireServer(
+                item:Get("ObjectID"),
+                enumLib:ToEnum("StartShooting"),
+                camdata,
+                nil
+            )
         end)
         pcall(function() hubTracerBeam(originPos, aimedPos) end)
     end
-    -- fused hit judgement + sounds + labels (hub path)
-    task.delay(0.35, function()
-        pcall(function()
-            local m = targetPlayer.Character local h = m and m:FindFirstChildOfClass("Humanoid")
-            local key = "rh"..tostring(targetPlayer.UserId)
-            local prev = getgenv()[key] local cur = h and h.Health or nil
-            getgenv()[key] = cur
-            if prev and cur and cur < prev then
-                rageLogFire(prev-cur)
-                if Cfg.RageKillNotify and cur <= 0 then rageSession("kill") playKillSound() pcall(function() hubNotify("Eliminated "..targetPlayer.DisplayName,3,"kill") end) end
-            else rageLogMiss("noDamage") end
-        end)
-    end)
-    if Cfg.RageTargetLabel then
-        task.spawn(function()
-            local L = aimDraw("rageLbl","Text") if not L then return end
-            for _ = 1, 30 do
-                local m = targetPlayer.Character local hd = m and (m:FindFirstChild("HitboxHead") or m:FindFirstChild("Head"))
-                if not hd then break end
-                local sp, on = cam:WorldToViewportPoint(hd.Position + Vector3.new(0,1,0))
-                if not on then break end
-                L.Text = targetPlayer.DisplayName L.Size, L.Center, L.Outline = 13, true, true
-                L.Color = Color3.fromRGB(255,80,80) L.Position, L.Visible = Vector2.new(sp.X, sp.Y), true
-                task.wait(0.1)
-            end
-            L.Visible = false
-        end)
-    end
-    playHitSound()
 end
 
 -- ---------- 3. MIXED AIMBOT (UE acquire/smoothing + Elisium mimic/delay) ----
@@ -21354,11 +21132,10 @@ function fusAimGetTarget(cam, fov)
     end
     return best
 end
--- hook hub finder to fused UE acquire when AimMixed (keeps duel-only/dummy logic)
+-- fused UE acquire replaces hub finder (duel-only/dummy gates kept)
 if not _baseFindAimTarget then _baseFindAimTarget = findAimTarget end
 function findAimTarget(cam)
-    if not Cfg.AimMixed then return _baseFindAimTarget(cam) end
-    -- reuse base for lock retention/diag, but selection uses UE scorer first
+    -- selection uses UE scorer first
     local t = fusAimGetTarget(cam)
     if t and t.model and t.part then
         _lockedModel = t.model _lockedPart = t.part _aimLockAt = tick()
@@ -21381,8 +21158,7 @@ end
 fusSilentT = fusSilentT or 0 fusSilentPos = fusSilentPos or nil
 if not _baseSilentClosest then _baseSilentClosest = silentClosestPart end
 function silentClosestPart(cam)
-    if not Cfg.SilentMixed then return _baseSilentClosest(cam) end
-    -- Elisium closest-part + UE FOV radius + hub gates
+    -- Elisium closest-part + UE FOV radius + targeting gates
     local mouse = UserInputService:GetMouseLocation()
     local best, bestD = nil, Cfg.SilentFOV or 130
     local wantPart = Cfg.SilentTargetPart or "Head"
@@ -22015,7 +21791,7 @@ if not getgenv()._FusLoop then
         pcall(function() fusAutoTick() end)
         -- fused aim delay smoothing rides on hub lock position
         pcall(function()
-            if Cfg.AimMixed and Cfg.AimDelayPos and getgenv()._HubAimSmPos then
+            if Cfg.AimDelayPos and getgenv()._HubAimSmPos then
                 getgenv()._HubAimSmPos = fusAimDelayStep(getgenv()._HubAimSmPos, math.clamp(dt or 0.016, 0.005, 0.1))
             end
         end)
@@ -22028,7 +21804,6 @@ pcall(function()
     if not (Tabs and Tabs.Aim and Tabs.ESP and Tabs.World and Tabs.Misc and Tabs.Settings) then return end
     -- Rage fusion controls
     local RF = Tabs.Aim:AddLeftGroupbox("FUSION Rage (UE x Elisium)")
-    RF:AddToggle("RageMixed", { Text = "Mixed Rage Engine", Default = Cfg.RageMixed, Callback = function(v) Cfg.RageMixed = v cfgSave() end })
     RF:AddDropdown("RageMode", { Text = "Mode", Default = Cfg.RageMode or "gun", Values = { "gun", "melee" }, Callback = function(v) Cfg.RageMode = v cfgSave() end })
     RF:AddToggle("RageFFA", { Text = "FFA Mode", Default = Cfg.RageFFA, Callback = function(v) Cfg.RageFFA = v cfgSave() end })
     RF:AddToggle("RagePredict", { Text = "Prediction", Default = Cfg.RagePredict, Callback = function(v) Cfg.RagePredict = v cfgSave() end })
@@ -22041,14 +21816,12 @@ pcall(function()
     RF:AddSlider("RageOrbitZ", { Text = "Orbit Z", Default = Cfg.RageOrbitZ or 7, Min = 1, Max = 10, Rounding = 1, Callback = function(v) Cfg.RageOrbitZ = v cfgSave() end })
     -- Aim fusion
     local AF = Tabs.Aim:AddRightGroupbox("FUSION Aim (UE x Elisium)")
-    AF:AddToggle("AimMixed", { Text = "Mixed Aim Engine", Default = Cfg.AimMixed, Callback = function(v) Cfg.AimMixed = v cfgSave() end })
     AF:AddToggle("AimMatchAxis", { Text = "Match Axis Y", Default = Cfg.AimMatchAxis, Callback = function(v) Cfg.AimMatchAxis = v cfgSave() end })
     AF:AddToggle("AimDelayPos", { Text = "Delay Position", Default = Cfg.AimDelayPos, Callback = function(v) Cfg.AimDelayPos = v cfgSave() end })
     AF:AddSlider("AimDelayX", { Text = "Delay X", Default = Cfg.AimDelayX or 4, Min = 1, Max = 20, Rounding = 0, Callback = function(v) Cfg.AimDelayX = v cfgSave() end })
     AF:AddSlider("AimDelayY", { Text = "Delay Y", Default = Cfg.AimDelayY or 4, Min = 1, Max = 20, Rounding = 0, Callback = function(v) Cfg.AimDelayY = v cfgSave() end })
     -- Silent fusion
     local SF = Tabs.Aim:AddRightGroupbox("FUSION Silent (UE x Elisium)")
-    SF:AddToggle("SilentMixed", { Text = "Mixed Silent Engine", Default = Cfg.SilentMixed, Callback = function(v) Cfg.SilentMixed = v cfgSave() end })
     SF:AddToggle("SilentVisualize", { Text = "Visualize", Default = Cfg.SilentVisualize, Callback = function(v) Cfg.SilentVisualize = v cfgSave() end })
     SF:AddToggle("SilentClosestPart", { Text = "Closest Part", Default = Cfg.SilentClosestPart, Callback = function(v) Cfg.SilentClosestPart = v cfgSave() end })
     SF:AddSlider("SilentRadius", { Text = "Radius", Default = Cfg.SilentRadius or 110, Min = 10, Max = 600, Rounding = 0, Callback = function(v) Cfg.SilentRadius = v Cfg.SilentFOV = v cfgSave() end })
